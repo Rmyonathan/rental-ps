@@ -1,0 +1,28 @@
+
+{
+  "name": "adb-control-server",
+  "version": "1.0.0",
+  "description": "ADB Control Server for PlayStation Rental Management",
+  "main": "adb-server.js",
+  "scripts": {
+    "start": "node adb-server.js",
+    "dev": "nodemon adb-server.js",
+    "test": "node -e \"console.log('Testing ADB Server...'); require('./adb-server.js')\""
+  },
+  "dependencies": {
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "keywords": [
+    "adb",
+    "android",
+    "tv",
+    "control",
+    "rental",
+    "playstation"
+  ],
+  "author": "Swakarsa Digital Indonesia",
+  "license": "MIT"
+}
