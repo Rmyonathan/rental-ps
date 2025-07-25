@@ -130,5 +130,7 @@ Route::get('/rentals/active-data', [RentalController::class, 'getActiveData']);
 Route::get('/rental-history/{tv_ip}', [RentalController::class, 'historyByIp'])->name('rental.history');
 Route::get('/rental-ip-list', [RentalController::class, 'ipList'])->name('rental.iplist');
 Route::get('/expired-rentals', [RentalController::class, 'expiredRentals']);
+Route::get('/rental/history/{tv_ip}', [RentalController::class, 'historyByIp'])->name('rental.historyByIp');
+
 
 

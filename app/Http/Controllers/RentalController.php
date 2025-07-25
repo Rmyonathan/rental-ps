@@ -633,13 +633,32 @@ class RentalController extends Controller
         ]);
     }
 
-    public function historyByIp($tv_ip)
+ public function historyByIp(Request $request, $tv_ip)
 {
-    $rentals = Rental::where('tv_ip', $tv_ip)
-                ->orderBy('start_time', 'desc')
-                ->get();
+    $query = Rental::where('tv_ip', $tv_ip);
 
-    // Hitung total durasi dalam menit (pastikan kolom duration_minutes ada di DB)
+    // Search berdasarkan nama/keterangan
+    if ($request->has('search') && !empty($request->search)) {
+        $keyword = $request->search;
+
+        $query->where(function($q) use ($keyword) {
+            $q->where('customer_name', 'like', "%{$keyword}%")
+              ->orWhere('ps_station', 'like', "%{$keyword}%");
+        });
+    }
+
+    // Filter tanggal mulai
+    if ($request->has('start_date') && !empty($request->start_date)) {
+        $query->whereDate('start_time', '>=', $request->start_date);
+    }
+
+    // Filter tanggal selesai
+    if ($request->has('end_date') && !empty($request->end_date)) {
+        $query->whereDate('end_time', '<=', $request->end_date);
+    }
+
+    $rentals = $query->orderBy('start_time', 'desc')->get();
+
     $totalDuration = $rentals->sum('duration_minutes');
     $totalHours = round($totalDuration / 60, 2);
 
@@ -650,6 +669,7 @@ class RentalController extends Controller
         'totalHours' => $totalHours,
     ]);
 }
+
 
 
 public function ipList()

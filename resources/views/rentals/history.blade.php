@@ -6,6 +6,26 @@
 
     <a href="{{ route('rental.iplist') }}" class="btn btn-secondary mb-3">← Kembali ke Daftar IP TV</a>
 
+    {{-- Search & Date Filter --}}
+    <form method="GET" class="mb-3">
+        <div class="row g-2 align-items-end">
+            <div class="col-md-4">
+                <input type="text" name="search" class="form-control" placeholder="Cari nama penyewa atau keterangan..." value="{{ request('search') }}">
+            </div>
+            <div class="col-md-3">
+                <label for="start_date" class="form-label">Dari Tanggal</label>
+                <input type="date" name="start_date" class="form-control" value="{{ request('start_date') }}">
+            </div>
+            <div class="col-md-3">
+                <label for="end_date" class="form-label">Sampai Tanggal</label>
+                <input type="date" name="end_date" class="form-control" value="{{ request('end_date') }}">
+            </div>
+            <div class="col-md-2">
+                <button type="submit" class="btn btn-primary w-100">Cari</button>
+            </div>
+        </div>
+    </form>
+
     @if ($rentals->isEmpty())
         <div class="alert alert-info">Belum ada riwayat peminjaman untuk TV ini.</div>
     @else
