@@ -14,7 +14,7 @@ class Rental extends Model
         'customer_name',
         'phone', 
         'ps_station',
-        'tv_ip',
+        'ip_address',
         'start_time',
         'end_time',
         'duration_minutes',

@@ -18,7 +18,7 @@ import uvicorn
 import json
 
 # Configuration
-ADB_PATH = r"C:\Users\yonat\platform-tools\adb.exe"
+ADB_PATH = r"C:\Users\LOQ 15\Downloads\platform-tools-latest-windows\platform-tools\adb.exe"
 VIDEO_PATH = "/sdcard/Movies/hot.mp4"
 PORT = 3001
 

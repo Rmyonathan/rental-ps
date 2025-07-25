@@ -633,4 +633,31 @@ class RentalController extends Controller
         ]);
     }
 
+    public function historyByIp($tv_ip)
+{
+    $rentals = Rental::where('tv_ip', $tv_ip)
+                ->orderBy('start_time', 'desc')
+                ->get();
+
+    // Hitung total durasi dalam menit (pastikan kolom duration_minutes ada di DB)
+    $totalDuration = $rentals->sum('duration_minutes');
+    $totalHours = round($totalDuration / 60, 2);
+
+    return view('rentals.history', [
+        'tv' => (object)['ip_address' => $tv_ip],
+        'rentals' => $rentals,
+        'totalDuration' => $totalDuration,
+        'totalHours' => $totalHours,
+    ]);
+}
+
+
+public function ipList()
+{
+    // Ambil semua IP unik dari tabel rentals
+    $ips = Rental::select('tv_ip')->distinct()->get();
+
+    return view('rentals.ip_list', compact('ips'));
+}
+
 }
