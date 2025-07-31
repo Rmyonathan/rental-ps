@@ -1,114 +1,185 @@
 #!/usr/bin/env python3
 """
 FastAPI ADB Control Server
-A lightweight Python alternative to the Node.js ADB server
+A lightweight, scalable, and configurable Python server for managing Android TVs.
+Version: 2.2.0 - Complete Feature Set
 """
 
 import asyncio
 import subprocess
-import time
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 import uvicorn
 import json
 
-# Configuration
-ADB_PATH = r"C:\Users\LOQ 15\Downloads\platform-tools-latest-windows\platform-tools\adb.exe"
-VIDEO_PATH = "/sdcard/Movies/hot.mp4"
+# ==============================================================================
+# --- 1. CORE CONFIGURATION ---
+# ==============================================================================
+
+# Set the full path to your ADB executable file
+ADB_PATH = r"C:\Users\yonat\platform-tools\adb.exe"
+
+# Set the network port for this server to run on
 PORT = 3001
 
-# Initialize FastAPI app
+# --- 2. TV DEVICE CONFIGURATION ---
+# This is the central place to manage all your TVs.
+# To add a new TV, add its IP address and define its command sequences.
+TV_CONFIGS = {
+    # Configuration for the Xiaomi TV
+    "192.168.1.20": {
+        "model": "xiaomi",
+        "video_path": "/sdcard/Movies/hot.mp4",
+        # Command sequence to switch to the correct HDMI input for rentals
+        "hdmi_switch_commands": [
+            "input keyevent 178",  # Open TV Input source menu
+            "sleep 2",             # Wait for the menu to appear
+            "input keyevent 20",   # DPAD_DOWN
+            "sleep 1",
+            "input keyevent 20",   # DPAD_DOWN
+            "sleep 1",
+            "input keyevent 20",   # DPAD_DOWN
+            "sleep 1",
+            "input keyevent 23"    # DPAD_CENTER (Selects the input)
+        ],
+        # List of commands to try for playing the timeout video
+        "play_video_commands": [
+            'am start -n org.videolan.vlc/org.videolan.vlc.gui.video.VideoPlayerActivity -d "file://{video_path}" --activity-clear-top',
+            'am start -a android.intent.action.VIEW -d "file://{video_path}" -t "video/mp4" --activity-clear-top'
+        ]
+    },
+    
+    # NEW: Specific configuration for the exceptional TCL TV
+    "192.168.1.35": {
+        "model": "tcl-special",
+        "video_path": "/sdcard/Movies/hot.mp4",
+        # Custom command sequence: input, down x4, ok
+        "hdmi_switch_commands": [
+            "input keyevent 178",  # Open TV Input source menu
+            "sleep 2",             # Wait for the menu to appear
+            "input keyevent 20",   # DPAD_DOWN
+            "sleep 1",
+            "input keyevent 20",   # DPAD_DOWN
+            "sleep 1",
+            "input keyevent 20",   # DPAD_DOWN
+            "sleep 1",
+            "input keyevent 20",   # DPAD_DOWN
+            "sleep 1",
+            "input keyevent 23"    # DPAD_CENTER (Selects the input)
+        ],
+        "play_video_commands": [
+            'am start -a android.intent.action.VIEW -d "file://{video_path}" -t "video/*" org.videolan.vlc'
+        ]
+    },
+    
+    # This is a default template for all your TCL TVs
+    "DEFAULT_TCL": {
+        "model": "tcl",
+        "video_path": "/sdcard/Movies/hot.mp4",
+        # Command sequence for TCL TVs
+        "hdmi_switch_commands": [
+            "input keyevent 178",  # Open TV Input source menu
+            "sleep 2",
+            "input keyevent 22",   # DPAD_RIGHT
+            "sleep 1",
+            "input keyevent 22",   # DPAD_RIGHT
+            "sleep 1",
+            "input keyevent 22",   # DPAD_RIGHT
+            "sleep 1",
+            "input keyevent 23"    # DPAD_CENTER (Selects the input)
+        ],
+        # Command for playing video on TCL TVs
+        "play_video_commands": [
+            'am start -a android.intent.action.VIEW -d "file://{video_path}" -t "video/*" org.videolan.vlc'
+        ]
+    }
+}
+ALL_TV_IPS = [
+    "192.168.1.20", "192.168.1.21", "192.168.1.30", "192.168.1.31", "192.168.1.32", "192.168.1.33",
+    "192.168.1.34", "192.168.1.35", "192.168.1.36", "192.168.1.37", "192.168.1.38"
+]
+# --- 3. LIST OF TCL TV IPs ---
+# Add all your TCL TV IP addresses here. They will automatically use the "DEFAULT_TCL" configuration.
+TCL_TV_IPS = [
+    "192.168.1.21", "192.168.1.30", "192.168.1.31", "192.168.1.32", "192.168.1.33", 
+    "192.168.1.34", "192.168.1.35", "192.168.1.36", "192.168.1.37", "192.168.1.38"
+]
+
+# Automatically apply the default TCL config to all TCL IPs
+for ip in TCL_TV_IPS:
+    if ip not in TV_CONFIGS:
+        TV_CONFIGS[ip] = TV_CONFIGS["DEFAULT_TCL"]
+
+# ==============================================================================
+# --- APPLICATION SETUP ---
+# ==============================================================================
+
 app = FastAPI(
     title="ADB Control Server",
-    description="FastAPI server for controlling Android TV via ADB",
-    version="1.0.0"
+    description="A scalable FastAPI server for controlling Android TVs via ADB.",
+    version="2.2.0"
 )
 
-# Fixed CORS configuration for SSE and cross-origin requests
+# Allow Cross-Origin Resource Sharing (CORS) for communication with the Laravel frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "*"  # Allow all origins for development
-    ],
+    allow_origins=["*"], # Allows all origins
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allow_headers=[
-        "Accept",
-        "Accept-Language",
-        "Content-Language",
-        "Content-Type",
-        "Authorization",
-        "Cache-Control",
-        "Connection",
-        "X-Requested-With",
-        "X-CSRF-TOKEN",
-        "Access-Control-Allow-Origin",
-        "Access-Control-Allow-Headers",
-        "*"
-    ],
-    expose_headers=[
-        "Cache-Control",
-        "Connection",
-        "Content-Type",
-        "Access-Control-Allow-Origin"
-    ]
+    allow_methods=["*"], # Allows all methods (GET, POST, etc.)
+    allow_headers=["*"], # Allows all headers
 )
 
-# Request models
-class ConnectTVRequest(BaseModel):
+# Global state for managing real-time rental monitoring
+active_rental_monitors: Dict[int, asyncio.Queue] = {}
+timeout_tasks: Dict[int, asyncio.Task] = {}
+
+# ==============================================================================
+# --- Pydantic Models (for API Request and Response validation) ---
+# ==============================================================================
+
+class TVRequest(BaseModel):
     tv_ip: str
 
-class SwitchHDMIRequest(BaseModel):
-    tv_ip: str
-
-class PlayVideoRequest(BaseModel):
+class PlayVideoRequest(TVRequest):
     rental_id: int
-    tv_ip: str
 
-# Global state for tracking active rentals and their timeouts
-active_rental_monitors = {}
-timeout_tasks = {}
-
-class RentalTimeoutRequest(BaseModel):
+class RentalTimeoutRequest(TVRequest):
     rental_id: int
-    tv_ip: str
     timeout_seconds: int = 30
 
-# Response models
+class TVControlRequest(TVRequest):
+    action: str  # e.g., 'volume_up', 'volume_down', 'power_off'
+    
+class SendKeyRequest(TVRequest):
+    keycode: int
+
 class BaseResponse(BaseModel):
     success: bool
-    error: Optional[str] = None
-
-class ADBTestResponse(BaseResponse):
-    version: Optional[Dict[str, Any]] = None
-    devices: Optional[Dict[str, Any]] = None
-    adb_path: str
-
-class ConnectResponse(BaseResponse):
     message: Optional[str] = None
-    connect_output: Optional[str] = None
-    devices: Optional[str] = None
+    error: Optional[str] = None
 
 class DevicesResponse(BaseResponse):
     devices: Optional[str] = None
 
-class HealthResponse(BaseModel):
-    status: str
-    timestamp: str
-    adb_path: str
+# ==============================================================================
+# --- CORE ADB & HELPER FUNCTIONS ---
+# ==============================================================================
 
-# Utility functions
-async def execute_adb(command: str, timeout: int = 10) -> Dict[str, Any]:
-    """Execute ADB command asynchronously"""
+def get_tv_config(tv_ip: str) -> Dict[str, Any]:
+    """Retrieves the configuration for a given TV IP, falling back to the default if not found."""
+    config = TV_CONFIGS.get(tv_ip)
+    if not config:
+        print(f"⚠️ Warning: No specific config for {tv_ip}. Using default TCL config.")
+        return TV_CONFIGS["DEFAULT_TCL"]
+    return config
+
+async def execute_adb_command(command: str, timeout: int = 10) -> Dict[str, Any]:
+    """Executes a full ADB command string asynchronously and returns the result."""
     full_command = f'"{ADB_PATH}" {command}'
     print(f"Executing: {full_command}")
     
@@ -118,648 +189,301 @@ async def execute_adb(command: str, timeout: int = 10) -> Dict[str, Any]:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
         
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(), 
-                timeout=timeout
-            )
+        stdout_str = stdout.decode('utf-8', errors='ignore').strip()
+        stderr_str = stderr.decode('utf-8', errors='ignore').strip()
+        
+        if process.returncode == 0:
+            return {"success": True, "output": stdout_str}
+        else:
+            error_message = stderr_str or f"Process failed with code {process.returncode}"
+            return {"success": False, "error": error_message, "output": stdout_str}
             
-            stdout_str = stdout.decode('utf-8', errors='ignore').strip()
-            stderr_str = stderr.decode('utf-8', errors='ignore').strip()
-            
-            if process.returncode == 0:
-                print(f"Success: {stdout_str}")
-                return {
-                    "success": True,
-                    "stdout": stdout_str,
-                    "stderr": stderr_str
-                }
-            else:
-                print(f"Error (code {process.returncode}): {stderr_str}")
-                return {
-                    "success": False,
-                    "error": stderr_str or f"Process failed with code {process.returncode}",
-                    "stdout": stdout_str,
-                    "stderr": stderr_str
-                }
-                
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
-            return {
-                "success": False,
-                "error": f"Command timeout after {timeout} seconds",
-                "stdout": "",
-                "stderr": ""
-            }
-            
+    except asyncio.TimeoutError:
+        return {"success": False, "error": f"Command timed out after {timeout} seconds"}
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "stdout": "",
-            "stderr": ""
-        }
+        return {"success": False, "error": str(e)}
 
-class SendKeyRequest(BaseModel):
-    tv_ip: str
-    keycode: int
+async def execute_command_sequence(tv_ip: str, commands: List[str]):
+    """Executes a sequence of ADB shell commands (e.g., for HDMI switching)."""
+    for command in commands:
+        if command.startswith("sleep"):
+            await asyncio.sleep(int(command.split(" ")[1]))
+        else:
+            result = await execute_adb_command(f'-s {tv_ip}:5555 shell {command}')
+            if not result["success"]:
+                return result  # Stop and return on the first error
+    return {"success": True}
 
-# Utility functions for SSE
-async def create_sse_response(generator):
-    """Create Server-Sent Events response with proper headers"""
-    return StreamingResponse(
-        generator,
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "Cache-Control, Connection, Content-Type",
-            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-            "Access-Control-Expose-Headers": "Cache-Control, Connection, Content-Type"
-        }
-    )
+# ==============================================================================
+# --- RENTAL MONITORING & SSE (Server-Sent Events) ---
+# ==============================================================================
 
 async def send_sse_message(event_type: str, data: dict):
-    """Format SSE message"""
+    """Formats data into a Server-Sent Event message string."""
     return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
 
 async def monitor_rental_timeout(rental_id: int, tv_ip: str, timeout_seconds: int):
-    """Monitor a rental and auto-play timeout video after specified seconds"""
+    """A background task that waits for the rental duration and then plays the timeout video."""
     try:
-        print(f"⏰ Starting timeout monitor for rental {rental_id} (TV: {tv_ip}) - {timeout_seconds}s")
+        print(f"⏰ Starting timeout monitor for rental {rental_id} ({tv_ip}) for {timeout_seconds}s")
+        await asyncio.sleep(timeout_seconds)
         
-        # Wait for the timeout period
-        await sleep_async(timeout_seconds)
-        
-        # Check if rental is still active (not cancelled)
-        if rental_id in active_rental_monitors:
-            print(f"🎬 Auto-playing timeout video for rental {rental_id}")
-            
-            # Play timeout video based on TV brand
-            if "192.168.1.20" in tv_ip:  # Xiaomi TV
-                result = await execute_adb(f"-s {tv_ip} shell input keyevent 3")  # Go home first
-                await sleep_async(2)
-                
-                # Try to play the video
-                commands = [
-                    f'-s {tv_ip} shell am start -n org.videolan.vlc/org.videolan.vlc.gui.video.VideoPlayerActivity -d "file://{VIDEO_PATH}" --activity-clear-top',
-                    f'-s {tv_ip} shell am start -a android.intent.action.VIEW -d "file://{VIDEO_PATH}" -t "video/mp4" --activity-clear-top',
-                    f'-s {tv_ip} shell am start -n com.android.gallery3d/com.android.gallery3d.app.MovieActivity -d "file://{VIDEO_PATH}"'
-                ]
-            else:  # TCL TV (192.168.1.21)
-                result = await execute_adb(f"-s {tv_ip} shell input keyevent 3")  # Go home first
-                await sleep_async(2)
-                
-                # Command for TCL TV
-                commands = [
-                    f'-s {tv_ip} shell am start -a android.intent.action.VIEW -d "file:///sdcard/Movies/hot.mp4" -t "video/*" org.videolan.vlc'
-                ]
-            
-            success = False
-            for command in commands:
-                result = await execute_adb(command)
-                if result["success"]:
-                    success = True
-                    break
-            
-            # Notify via SSE that timeout video was played
+        if rental_id in timeout_tasks:  # Check if the task wasn't cancelled
+            print(f"🎬 Timeout reached for rental {rental_id}. Playing video.")
+            result = await play_timeout_video_internal(tv_ip, rental_id)
             if rental_id in active_rental_monitors:
-                try:
-                    await active_rental_monitors[rental_id].put({
-                        "type": "timeout_video_played",
-                        "rental_id": rental_id,
-                        "tv_ip": tv_ip,
-                        "success": success,
-                        "timestamp": datetime.now().isoformat()
-                    })
-                except:
-                    pass  # Queue might be closed
-            
-            print(f"✅ Timeout video {'played successfully' if success else 'failed to play'} for rental {rental_id}")
-    
+                await active_rental_monitors[rental_id].put({
+                    "type": "timeout_triggered",
+                    "success": result["success"],
+                    "errors": result.get("errors")
+                })
+
     except asyncio.CancelledError:
-        print(f"❌ Timeout monitor for rental {rental_id} was cancelled")
+        print(f"✅ Timeout monitor for rental {rental_id} was successfully cancelled.")
     except Exception as e:
-        print(f"❌ Error in timeout monitor for rental {rental_id}: {str(e)}")
+        print(f"❌ Error in timeout monitor for rental {rental_id}: {e}")
 
-async def sleep_async(seconds: float):
-    """Async sleep function"""
-    await asyncio.sleep(seconds)
-
-# Add OPTIONS handler for preflight requests
-@app.options("/{path:path}")
-async def options_handler(path: str):
-    """Handle preflight OPTIONS requests"""
-    return {
-        "message": "OK"
-    }
-
-# SSE Routes
 @app.get("/events/{rental_id}")
-async def rental_events(rental_id: int):
-    """Server-Sent Events endpoint for rental monitoring"""
-    
+async def rental_events_stream(rental_id: int):
+    """SSE endpoint to stream real-time events for a specific rental."""
     async def event_generator():
-        # Create a queue for this rental's events
         queue = asyncio.Queue()
         active_rental_monitors[rental_id] = queue
-        
         try:
-            # Send initial connection message
-            yield await send_sse_message("connected", {
-                "rental_id": rental_id,
-                "message": f"Connected to rental {rental_id} monitoring",
-                "timestamp": datetime.now().isoformat()
-            })
-            
-            # Send periodic heartbeat and wait for events
+            yield await send_sse_message("connected", {"rental_id": rental_id})
             while True:
-                try:
-                    # Wait for events with timeout for heartbeat
-                    event_data = await asyncio.wait_for(queue.get(), timeout=10.0)
-                    yield await send_sse_message(event_data["type"], event_data)
-                except asyncio.TimeoutError:
-                    # Send heartbeat every 10 seconds
-                    yield await send_sse_message("heartbeat", {
-                        "rental_id": rental_id,
-                        "timestamp": datetime.now().isoformat()
-                    })
-                
+                event_data = await queue.get()
+                yield await send_sse_message(event_data.get('type', 'message'), event_data)
         except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            print(f"SSE error for rental {rental_id}: {str(e)}")
+            print(f"Client for rental {rental_id} disconnected.")
         finally:
-            # Clean up when client disconnects
+            # Cleanup when the client disconnects
             if rental_id in active_rental_monitors:
                 del active_rental_monitors[rental_id]
             if rental_id in timeout_tasks:
                 timeout_tasks[rental_id].cancel()
                 del timeout_tasks[rental_id]
-    
-    return await create_sse_response(event_generator())
 
-@app.post("/start-rental-monitor")
-async def start_rental_monitor(request: RentalTimeoutRequest):
-    """Start monitoring a rental for timeout"""
-    try:
-        rental_id = request.rental_id
-        
-        # Cancel existing monitor if any
-        if rental_id in timeout_tasks:
-            timeout_tasks[rental_id].cancel()
-        
-        # Start new timeout monitor
-        task = asyncio.create_task(
-            monitor_rental_timeout(rental_id, request.tv_ip, request.timeout_seconds)
-        )
-        timeout_tasks[rental_id] = task
-        
-        # Send immediate notification if SSE connection exists
-        if rental_id in active_rental_monitors:
-            try:
-                await active_rental_monitors[rental_id].put({
-                    "type": "monitor_started",
-                    "rental_id": rental_id,
-                    "tv_ip": request.tv_ip,
-                    "timeout_seconds": request.timeout_seconds,
-                    "timestamp": datetime.now().isoformat()
-                })
-            except:
-                pass
-        
-        return BaseResponse(
-            success=True,
-            error=None
-        )
-        
-    except Exception as e:
-        return BaseResponse(
-            success=False,
-            error=str(e)
-        )
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-@app.post("/stop-rental-monitor/{rental_id}")
-async def stop_rental_monitor(rental_id: int):
-    """Stop monitoring a rental (when rental is completed/cancelled)"""
-    try:
-        # Cancel timeout task
-        if rental_id in timeout_tasks:
-            timeout_tasks[rental_id].cancel()
-            del timeout_tasks[rental_id]
-        
-        # Notify via SSE
-        if rental_id in active_rental_monitors:
-            try:
-                await active_rental_monitors[rental_id].put({
-                    "type": "monitor_stopped",
-                    "rental_id": rental_id,
-                    "timestamp": datetime.now().isoformat()
-                })
-            except:
-                pass
-        
-        return BaseResponse(
-            success=True,
-            error=None
-        )
-        
-    except Exception as e:
-        return BaseResponse(
-            success=False,
-            error=str(e)
-        )
+# ==============================================================================
+# --- API ENDPOINTS ---
+# ==============================================================================
 
-@app.get("/health", response_model=HealthResponse)
+@app.options("/{path:path}")
+async def options_handler(path: str):
+    """Handles preflight OPTIONS requests for CORS."""
+    return JSONResponse(content={"message": "OK"})
+
+@app.get("/health")
 async def health_check():
-    """Health check endpoint"""
-    return HealthResponse(
-        status="ADB Server is running",
-        timestamp=datetime.now().isoformat(),
-        adb_path=ADB_PATH
-    )
+    """Provides a basic health check of the server and its configuration."""
+    return {
+        "status": "ADB Server is running",
+        "timestamp": datetime.now().isoformat(),
+        "adb_path": ADB_PATH,
+        "configured_tvs": list(TV_CONFIGS.keys())
+    }
 
-@app.get("/test-adb", response_model=ADBTestResponse)
-async def test_adb():
-    """Test ADB connection and installation"""
-    try:
-        version_result = await execute_adb('version')
-        devices_result = await execute_adb('devices')
-        
-        return ADBTestResponse(
-            success=True,
-            version=version_result,
-            devices=devices_result,
-            adb_path=ADB_PATH
-        )
-    except Exception as e:
-        return ADBTestResponse(
-            success=False,
-            error=str(e),
-            adb_path=ADB_PATH
-        )
-
-@app.post("/connect-tv", response_model=ConnectResponse)
-async def connect_tv(request: ConnectTVRequest):
-    """Connect to Android TV"""
-    try:
-        # First check if already connected
-        devices_result = await execute_adb('devices')
-        
-        if devices_result["success"] and request.tv_ip in devices_result["stdout"]:
-            return ConnectResponse(
-                success=True,
-                message=f"TV {request.tv_ip} is already connected",
-                devices=devices_result["stdout"]
-            )
-        
-        # Try to connect
-        connect_result = await execute_adb(f"connect {request.tv_ip}:5555", 15)
-        
-        # Wait and verify connection
-        await sleep_async(2)
-        verify_result = await execute_adb('devices')
-        
-        if verify_result["success"] and request.tv_ip in verify_result["stdout"]:
-            return ConnectResponse(
-                success=True,
-                message=f"Successfully connected to TV {request.tv_ip}",
-                connect_output=connect_result["stdout"],
-                devices=verify_result["stdout"]
-            )
-        else:
-            return ConnectResponse(
-                success=False,
-                error="Connection failed - TV not found in devices list",
-                connect_output=connect_result["stdout"],
-                devices=verify_result["stdout"]
-            )
-            
-    except Exception as e:
-        return ConnectResponse(
-            success=False,
-            error=str(e)
-        )
-
-@app.post("/switch-to-hdmi2", response_model=BaseResponse)
-async def switch_to_hdmi2(request: SwitchHDMIRequest):
-    """Switch TV to HDMI 2 (Rental Start)"""
-    try:
-        print(f"Switching TV {request.tv_ip} to HDMI 2")
-        
-        if "192.168.1.20" in request.tv_ip:  # Xiaomi TV
-            # Send TV Input key
-            await execute_adb(f"-s {request.tv_ip}:5555 shell input keyevent 178")
-            await sleep_async(2)
-            
-            # Navigate down 3 times to HDMI 2
-            for i in range(3):
-                await execute_adb(f"-s {request.tv_ip}:5555 shell input keyevent 20")  # DPAD_DOWN
-                await sleep_async(1)
-            
-            # Select HDMI 2
-            await execute_adb(f"-s {request.tv_ip}:5555 shell input keyevent 23")  # DPAD_CENTER
-            await sleep_async(3)
-        else:  # TCL TV (192.168.1.21)
-            # Send TV Input key
-            await execute_adb(f"-s {request.tv_ip}:5555 shell input keyevent 178")
-            await sleep_async(2)
-            
-            # Navigate right 2 times to HDMI 1
-            for i in range(2):
-                await execute_adb(f"-s {request.tv_ip}:5555 shell input keyevent 22")  # DPAD_RIGHT
-                await sleep_async(1)
-            
-            # Select HDMI 2
-            await execute_adb(f"-s {request.tv_ip}:5555 shell input keyevent 23")  # DPAD_CENTER
-            await sleep_async(3)
-        
-        return BaseResponse(
-            success=True,
-            error=None
-        )
-        
-    except Exception as e:
-        return BaseResponse(
-            success=False,
-            error=str(e)
-        )
-
-@app.post("/play-timeout-video", response_model=BaseResponse)
-async def play_timeout_video(request: PlayVideoRequest):
-    """Play timeout video on TV with consistent path handling"""
-    try:
-        print(f"Playing timeout video on TV {request.tv_ip}")
-        
-        # Go to home first
-        await execute_adb(f"-s {request.tv_ip}:5555 shell input keyevent 3")
-        await sleep_async(3)  # Increased delay
-        
-        # Define TV-specific video paths (you may need to adjust these)
-        if "192.168.1.20" in request.tv_ip:  # Xiaomi TV
-            video_path = VIDEO_PATH  # /sdcard/Movies/hot.mp4
-            commands = [
-                f'-s {request.tv_ip}:5555 shell am start -n org.videolan.vlc/org.videolan.vlc.gui.video.VideoPlayerActivity -d "file://{video_path}" --activity-clear-top',
-                f'-s {request.tv_ip}:5555 shell am start -a android.intent.action.VIEW -d "file://{video_path}" -t "video/mp4" --activity-clear-top',
-                f'-s {request.tv_ip}:5555 shell am start -n com.android.gallery3d/com.android.gallery3d.app.MovieActivity -d "file://{video_path}"'
-            ]
-        else:  # TCL TV (192.168.1.21)
-            # First, let's verify the correct path for TCL TV
-            video_path = "/sdcard/Movies/hot.mp4"  # Adjust this if needed
-            commands = [
-                f'-s {request.tv_ip}:5555 shell am start -n org.videolan.vlc/org.videolan.vlc.gui.video.VideoPlayerActivity -d "file://{video_path}" --activity-clear-top',
-                f'-s {request.tv_ip}:5555 shell am start -a android.intent.action.VIEW -d "file://{video_path}" -t "video/*" --activity-clear-top'
-            ]
-        
-        # Verify file exists first
-        verify_result = await execute_adb(f"-s {request.tv_ip}:5555 shell ls -la '{video_path}'")
-        if not verify_result["success"] or "hot.mp4" not in verify_result.get("stdout", ""):
-            print(f"❌ Video file not found at {video_path}")
-            return BaseResponse(
-                success=False,
-                error=f"Video file not found at {video_path} on TV {request.tv_ip}"
-            )
-        
-        print(f"✅ Video file verified at {video_path}")
-        
-        success = False
-        errors = []
-        
-        for i, command in enumerate(commands):
-            print(f"Trying command {i+1}/{len(commands)}")
-            result = await execute_adb(command, timeout=15)
-            
-            if result["success"]:
-                print(f"✅ Command {i+1} succeeded")
-                success = True
-                break
-            else:
-                error_msg = result.get("error", "") or result.get("stderr", "Unknown error")
-                errors.append(f"Cmd{i+1}: {error_msg}")
-                print(f"❌ Command {i+1} failed: {error_msg}")
-                
-                # Wait between attempts
-                if i < len(commands) - 1:
-                    await sleep_async(2)
-        
-        if success:
-            return BaseResponse(success=True, error=None)
-        else:
-            return BaseResponse(
-                success=False,
-                error=f"All commands failed for {video_path}: {'; '.join(errors)}"
-            )
-            
-    except Exception as e:
-        print(f"❌ Exception in play_timeout_video: {str(e)}")
-        return BaseResponse(success=False, error=str(e))
-
-
-@app.post("/send-key", response_model=BaseResponse)
-async def send_key(request: SendKeyRequest):
-    """Send key event to TV"""
-    try:
-        result = await execute_adb(f"-s {request.tv_ip}:5555 shell input keyevent {request.keycode}")
-        
-        return BaseResponse(
-            success=result["success"],
-            error=None if result["success"] else f"Failed to send key: {result.get('error', '')}"
-        )
-        
-    except Exception as e:
-        return BaseResponse(
-            success=False,
-            error=str(e)
-        )
-
-@app.post("/restart-adb", response_model=DevicesResponse)
-async def restart_adb():
-    """Restart ADB daemon"""
-    try:
-        print('Restarting ADB daemon...')
-        
-        # Kill server
-        await execute_adb('kill-server')
-        await sleep_async(2)
-        
-        # Start server
-        await execute_adb('start-server')
-        await sleep_async(3)
-        
-        # Test if working
-        devices_result = await execute_adb('devices')
-        
-        return DevicesResponse(
-            success=devices_result["success"],
-            error=None if devices_result["success"] else "Failed to restart ADB daemon",
-            devices=devices_result["stdout"]
-        )
-        
-    except Exception as e:
-        return DevicesResponse(
-            success=False,
-            error=str(e)
-        )
+@app.get("/test-adb")
+async def test_adb_installation():
+    """Tests the ADB installation and lists currently connected devices."""
+    version_result = await execute_adb_command('version')
+    devices_result = await execute_adb_command('devices')
+    return {
+        "success": version_result["success"] and devices_result["success"],
+        "adb_version": version_result.get("output"),
+        "connected_devices": devices_result.get("output"),
+        "error": version_result.get("error") or devices_result.get("error")
+    }
     
-@app.post("/rental-timeout", response_model=BaseResponse)
-async def rental_timeout(request: dict):
-    """Trigger the same timeout sequence that normal monitoring uses"""
-    try:
-        tv_ip = request.get('tv_ip')
-        rental_id = request.get('rental_id')
-        
-        print(f"🎬 Manual rental timeout for rental {rental_id} on TV {tv_ip}")
-        
-        # Use the same logic as your normal timeout
-        # This should match exactly what happens in your monitoring system
-        result = await execute_timeout_sequence(tv_ip, rental_id)
-        
-        return BaseResponse(
-            success=result.get('success', False),
-            error=result.get('error')
-        )
-        
-    except Exception as e:
-        return BaseResponse(success=False, error=f"Manual timeout failed: {str(e)}")
-    
-
-    
-
-async def execute_timeout_sequence(tv_ip: str, rental_id: int = None):
-    """Execute the same timeout sequence used by normal monitoring"""
-    try:
-        # Go to home first
-        await execute_adb(f"-s {tv_ip}:5555 shell input keyevent 3")
-        await sleep_async(3)
-        
-        # Use the same video path logic as your working normal timeout
-        if "192.168.1.20" in tv_ip:  # Xiaomi TV
-            video_path = VIDEO_PATH
-        else:  # TCL TV
-            video_path = "/sdcard/Movies/hot.mp4"
-        
-        # Use the exact same commands that work in normal timeout
-        command = f'-s {tv_ip}:5555 shell am start -n org.videolan.vlc/org.videolan.vlc.gui.video.VideoPlayerActivity -d "file://{video_path}" --activity-clear-top'
-        
-        result = await execute_adb(command, timeout=15)
-        
-        if result["success"]:
-            print(f"✅ Manual timeout video started successfully")
-            return {"success": True}
-        else:
-            print(f"❌ Manual timeout video failed: {result.get('error', '')}")
-            return {"success": False, "error": result.get('error', 'Unknown error')}
-            
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
 @app.get("/devices", response_model=DevicesResponse)
 async def get_devices():
-    """Get connected devices"""
-    try:
-        result = await execute_adb('devices')
-        
-        return DevicesResponse(
-            success=result["success"],
-            devices=result["stdout"],
-            error=result.get("error")
-        )
-    except Exception as e:
-        return DevicesResponse(
-            success=False,
-            error=str(e)
-        )
-    
-@app.post("/tv-control", response_model=BaseResponse)
-async def control_tv(request: dict):
-    """Control TV functions like volume and power"""
-    try:
-        tv_ip = request.get('tv_ip')
-        action = request.get('action')
-        
-        if not tv_ip or not action:
-            return BaseResponse(success=False, error="tv_ip and action are required")
-        
-        print(f"📺 Controlling TV {tv_ip}: {action}")
-        
-        # ADB commands for different actions
-        commands = {
-            'volume_up': ['adb', '-s', f'{tv_ip}:5555', 'shell', 'input', 'keyevent', 'KEYCODE_VOLUME_UP'],
-            'volume_down': ['adb', '-s', f'{tv_ip}:5555', 'shell', 'input', 'keyevent', 'KEYCODE_VOLUME_DOWN'],
-            'power_off': ['adb', '-s', f'{tv_ip}:5555', 'shell', 'input', 'keyevent', 'KEYCODE_POWER']
-        }
-        
-        if action not in commands:
-            return BaseResponse(success=False, error=f"Unknown action: {action}")
-        
-        # Execute the command
-        result = subprocess.run(
-            commands[action],
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
-        
-        if result.returncode == 0:
-            return BaseResponse(success=True, message=f"TV {action} executed successfully")
-        else:
-            return BaseResponse(success=False, error=f"Failed to execute {action}: {result.stderr}")
-            
-    except Exception as e:
-        return BaseResponse(success=False, error=f"TV control failed: {str(e)}")
-    
-@app.post("/test-xiaomi", response_model=BaseResponse)
-async def test_xiaomi_tv(request: dict):
-    """Test Xiaomi TV (expects to stay connected in standby)"""
-    tv_ip = "192.168.1.20"
-    devices_result = await execute_adb('devices', timeout=5)
-    
-    if f"{tv_ip}:5555" in devices_result.get('stdout', '') and "offline" not in devices_result.get('stdout', ''):
-        return BaseResponse(success=True, message="Xiaomi TV ready")
-    else:
-        connect_result = await execute_adb(f'connect {tv_ip}:5555', timeout=8)
-        return BaseResponse(
-            success="connected" in connect_result.get('stdout', ''),
-            message="Xiaomi TV connected" if "connected" in connect_result.get('stdout', '') else "Connection failed"
-        )
-    
-@app.post("/test-tcl", response_model=BaseResponse)
-async def test_tcl_tv(request: dict):
-    """Test TCL TV (handles offline status gracefully)"""
-    tv_ip = "192.168.1.21"
-    
-    # For TCL, try direct command first since it might show offline but still work
-    test_result = await execute_adb(f'-s {tv_ip}:5555 shell echo test', timeout=5)
-    if test_result['success']:
-        return BaseResponse(success=True, message="TCL TV responsive")
-    
-    # If that fails, try to connect
-    connect_result = await execute_adb(f'connect {tv_ip}:5555', timeout=10)
-    if "connected" in connect_result.get('stdout', ''):
-        return BaseResponse(success=True, message="TCL TV connected")
-    else:
-        return BaseResponse(success=False, error="TCL TV unavailable")    
+    """Gets a list of currently connected ADB devices."""
+    result = await execute_adb_command('devices')
+    return DevicesResponse(
+        success=result["success"],
+        devices=result.get("output"),
+        error=result.get("error")
+    )
 
+@app.post("/connect-tv", response_model=BaseResponse)
+async def connect_to_tv(request: TVRequest):
+    """Establishes an ADB connection to a TV."""
+    result = await execute_adb_command(f"connect {request.tv_ip}:5555", timeout=15)
+    if "connected" in result.get("output", "") or "already connected" in result.get("output", ""):
+        return BaseResponse(success=True, message=f"Successfully connected to {request.tv_ip}")
+    else:
+        return BaseResponse(success=False, error=result.get("error", "Connection failed"))
+
+@app.post("/restart-adb", response_model=DevicesResponse)
+async def restart_adb_server():
+    """Kills and restarts the ADB server daemon."""
+    await execute_adb_command('kill-server')
+    await asyncio.sleep(2)
+    await execute_adb_command('start-server')
+    await asyncio.sleep(2)
+    result = await execute_adb_command('devices')
+    return DevicesResponse(
+        success=result["success"],
+        devices=result.get("output"),
+        error=result.get("error")
+    )
+
+@app.post("/switch-to-hdmi2", response_model=BaseResponse)
+async def switch_tv_to_hdmi2(request: TVRequest):
+    """Switches the TV to the configured HDMI input at the start of a rental."""
+    config = get_tv_config(request.tv_ip)
+    result = await execute_command_sequence(request.tv_ip, config["hdmi_switch_commands"])
+    if not result["success"]:
+        return BaseResponse(success=False, error=f"Failed to switch HDMI: {result.get('error')}")
+    return BaseResponse(success=True, message=f"TV {request.tv_ip} switched to HDMI input.")
+
+async def play_timeout_video_internal(tv_ip: str, rental_id: int):
+    """
+    Internal logic for playing the timeout video, used by monitor and manual trigger.
+    This version is more robust to prevent common playback failures.
+    """
+    config = get_tv_config(tv_ip)
+    video_path = config["video_path"]
+    vlc_package = "org.videolan.vlc"
+
+    # 1. (NEW) Force stop the media player to clear any bad state.
+    print(f"🎬 Resetting state for {tv_ip}: Forcing stop on {vlc_package}")
+    await execute_adb_command(f"-s {tv_ip}:5555 shell am force-stop {vlc_package}")
+    await asyncio.sleep(1)
+
+    # 2. Go to the Home screen to ensure a clean start (this was already here).
+    print(f"🎬 Resetting state for {tv_ip}: Sending HOME keyevent")
+    await execute_adb_command(f"-s {tv_ip}:5555 shell input keyevent 3")
+    await asyncio.sleep(2)
+
+    # 3. Attempt to play the video using the configured commands.
+    success = False
+    errors = []
+    for command_template in config["play_video_commands"]:
+        command = f'-s {tv_ip}:5555 shell {command_template.format(video_path=video_path)}'
+        result = await execute_adb_command(command, timeout=15)
+        if result["success"]:
+            # 4. (NEW) Optional but recommended: Check if VLC is now the focused app.
+            await asyncio.sleep(2) # Give time for the app to launch
+            check_result = await execute_adb_command(f"-s {tv_ip}:5555 shell dumpsys activity | findstr mFocusedActivity")
+            if vlc_package in check_result.get("output", ""):
+                print(f"✅ Playback confirmed on {tv_ip}.")
+                success = True
+                break # Exit the loop on first success
+            else:
+                errors.append("Command sent, but playback could not be confirmed.")
+        else:
+            errors.append(result.get("error", "Unknown error"))
+    
+    return {"success": success, "errors": errors}
+
+@app.post("/play-timeout-video", response_model=BaseResponse)
+async def play_timeout_video_endpoint(request: PlayVideoRequest):
+    """API endpoint to manually trigger the timeout video for a rental."""
+    result = await play_timeout_video_internal(request.tv_ip, request.rental_id)
+    if not result["success"]:
+        return BaseResponse(success=False, error=f"Failed to play video: {'; '.join(result['errors'])}")
+    return BaseResponse(success=True, message=f"Timeout video started on {request.tv_ip}.")
+
+@app.post("/rental-timeout", response_model=BaseResponse)
+async def manual_rental_timeout(request: PlayVideoRequest):
+    """Manually triggers the timeout sequence for a rental."""
+    print(f"🎬 Manual rental timeout for rental {request.rental_id} on TV {request.tv_ip}")
+    result = await play_timeout_video_internal(request.tv_ip, request.rental_id)
+    if not result["success"]:
+        return BaseResponse(success=False, error=f"Manual timeout failed: {'; '.join(result['errors'])}")
+    return BaseResponse(success=True, message="Manual timeout sequence triggered.")
+
+@app.post("/tv-control", response_model=BaseResponse)
+async def control_tv(request: TVControlRequest):
+    """Controls basic TV functions like volume and power."""
+    key_map = {
+        'volume_up': 'KEYCODE_VOLUME_UP',
+        'volume_down': 'KEYCODE_VOLUME_DOWN',
+        'power_off': 'KEYCODE_POWER'
+    }
+    if request.action not in key_map:
+        return BaseResponse(success=False, error="Invalid action specified.")
+
+    keycode = key_map[request.action]
+    result = await execute_adb_command(f"-s {request.tv_ip}:5555 shell input keyevent {keycode}")
+    
+    if not result["success"]:
+        return BaseResponse(success=False, error=f"Failed to execute '{request.action}': {result.get('error')}")
+    return BaseResponse(success=True, message=f"Action '{request.action}' sent to {request.tv_ip}.")
+
+@app.post("/send-key", response_model=BaseResponse)
+async def send_key_event(request: SendKeyRequest):
+    """Sends a raw keycode event to a TV."""
+    result = await execute_adb_command(f"-s {request.tv_ip}:5555 shell input keyevent {request.keycode}")
+    if not result["success"]:
+        return BaseResponse(success=False, error=f"Failed to send keycode {request.keycode}: {result.get('error')}")
+    return BaseResponse(success=True, message=f"Keycode {request.keycode} sent to {request.tv_ip}.")
+
+@app.post("/test-connection", response_model=BaseResponse)
+async def test_tv_connection(request: TVRequest):
+    """Checks if a TV is online and responsive via ADB."""
+    # A simple 'echo' command is a lightweight way to check for a response.
+    result = await execute_adb_command(f"-s {request.tv_ip}:5555 shell echo online", timeout=5)
+    if result.get("success") and "online" in result.get("output", ""):
+        return BaseResponse(success=True, message="TV is online and responsive.")
+    else:
+        # If the lightweight check fails, try a full reconnect.
+        connect_result = await connect_to_tv(request)
+        if connect_result.success:
+            return BaseResponse(success=True, message="TV was offline but reconnected successfully.")
+        else:
+            return BaseResponse(success=False, error=f"TV is offline. Connection attempt failed: {connect_result.error}")
+
+@app.post("/start-rental-monitor", response_model=BaseResponse)
+async def start_rental_monitor(request: RentalTimeoutRequest):
+    """Starts the background timeout monitor for a new rental."""
+    rental_id = request.rental_id
+    if rental_id in timeout_tasks:
+        timeout_tasks[rental_id].cancel()
+    
+    task = asyncio.create_task(
+        monitor_rental_timeout(rental_id, request.tv_ip, request.timeout_seconds)
+    )
+    timeout_tasks[rental_id] = task
+    return BaseResponse(success=True, message=f"Monitor started for rental {rental_id}.")
+
+@app.post("/stop-rental-monitor/{rental_id}", response_model=BaseResponse)
+async def stop_rental_monitor(rental_id: int):
+    """Stops the background timeout monitor for a completed or cancelled rental."""
+    if rental_id in timeout_tasks:
+        timeout_tasks[rental_id].cancel()
+        del timeout_tasks[rental_id]
+        return BaseResponse(success=True, message=f"Monitor stopped for rental {rental_id}.")
+    return BaseResponse(success=False, error=f"No active monitor found for rental {rental_id}.")
+
+@app.post("/test-all-connections")
+async def test_all_tv_connections():
+    """NEW: Checks all configured TVs concurrently and returns their statuses."""
+    async def check_one_tv(ip: str):
+        result = await execute_adb_command(f"-s {ip}:5555 shell echo online", timeout=5)
+        if result.get("success") and "online" in result.get("output", ""):
+            return ip, {"success": True, "message": "Online"}
+        else:
+            connect_result = await execute_adb_command(f"connect {ip}:5555", timeout=10)
+            if "connected" in connect_result.get("output", "") or "already connected" in connect_result.get("output", ""):
+                 return ip, {"success": True, "message": "Reconnected"}
+            else:
+                 return ip, {"success": False, "error": "Offline"}
+    tasks = [check_one_tv(ip) for ip in ALL_TV_IPS]
+    results = await asyncio.gather(*tasks)
+    return dict(results)
 
 if __name__ == "__main__":
-    print("🚀 ADB Control Server starting...")
+    print("=============================================")
+    print("🚀 ADB CONTROL SERVER v2.2 🚀")
+    print("=============================================")
     print(f"📱 ADB Path: {ADB_PATH}")
-    print(f"🎬 Video Path: {VIDEO_PATH}")
     print(f"🌐 Server will run on http://localhost:{PORT}")
-    print("\n📋 Available Endpoints:")
-    print("  GET  /health - Health check")
-    print("  GET  /test-adb - Test ADB installation")
-    print("  GET  /devices - Get connected devices")
-    print("  POST /connect-tv - Connect to TV")
-    print("  POST /switch-to-hdmi2 - Switch TV to HDMI 2")
-    print("  POST /play-timeout-video - Play timeout video")
-    print("  POST /send-key - Send key event")
-    print("  POST /restart-adb - Restart ADB daemon")
-    print("  GET  /docs - Interactive API documentation")
-    print("  GET  /events/{rental_id} - Server-Sent Events for rental monitoring")
-    
+    print("\n📋 Use http://localhost:3001/docs for the interactive API documentation.")
+    print("=============================================")
     uvicorn.run(app, host="0.0.0.0", port=PORT)

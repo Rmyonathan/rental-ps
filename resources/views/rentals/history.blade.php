@@ -4,7 +4,7 @@
 <div class="container">
     <h3 class="mb-4">Riwayat Peminjaman - IP: {{ $tv->ip_address }}</h3>
 
-    <a href="{{ route('rental.iplist') }}" class="btn btn-secondary mb-3">← Kembali ke Daftar IP TV</a>
+    <a href="{{ route('rentals.ip-list') }}" class="btn btn-secondary mb-3">← Kembali ke Daftar IP TV</a>
 
     {{-- Search & Date Filter --}}
     <form method="GET" class="mb-3">

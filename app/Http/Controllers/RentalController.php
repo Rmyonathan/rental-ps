@@ -1,683 +1,279 @@
 <?php
-// File: app/Http/Controllers/RentalController.php
 
 namespace App\Http\Controllers;
 
 use App\Models\Rental;
 use App\Services\TvControlService;
+use App\Services\TransactionService;
 use Illuminate\Http\Request;
-use Symfony\Component\Process\Process;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
 
-
 class RentalController extends Controller
 {
-    private $tvControlService;
-    private string $adbPath = 'C:\Users\yonat\platform-tools\adb.exe'; // Full path to ADB
+    protected $tvControlService;
 
     public function __construct(TvControlService $tvControlService)
     {
         $this->tvControlService = $tvControlService;
     }
 
+    /**
+     * Display the main dashboard with all configured TV stations and their rental status.
+     */
     public function index()
     {
-        $activeRentals = Rental::with(['cafeOrders.items.cafeItem']) // Load cafe orders with items
-            ->where('status', 'active')
-            ->where('end_time', '>', Carbon::now())
-            ->orderBy('end_time', 'asc')
-            ->get();
+        // Get the list of all configured TV IPs from the Python server
+        $configuredTvs = $this->tvControlService->getConfiguredTvs();
+        
+        if (empty($configuredTvs)) {
+            // Fallback to a default list if the API is down to prevent a crash
+            $configuredTvs = ['192.168.1.20', '192.168.1.21']; 
+             session()->flash('warning', 'Could not connect to the TV control server. Please ensure it is running. Displaying a default list of TVs.');
+        }
 
-        return view('rentals.index', compact('activeRentals'));
+        $activeRentals = Rental::where('status', 'active')->with('cafeOrders')->get()->keyBy('tv_ip');
+
+        // Create a collection of TV station objects for the view
+        $tvStations = collect($configuredTvs)->map(function ($ip, $index) use ($activeRentals) {
+            // Create a more descriptive station name
+            $stationName = 'PS' . ($index + 1);
+            $model = $this->tvControlService->getApiHealth()['configured_tvs'][$ip]['model'] ?? 'TV';
+            $stationName .= ' (' . ucfirst($model) . ')';
+
+            return (object)[
+                'ip' => $ip,
+                'station_name' => 'PS' . ($index + 1),
+                'rental' => $activeRentals->get($ip)
+            ];
+        });
+        
+        return view('rentals.index', [
+            'tvStations' => $tvStations,
+            'activeRentals' => $activeRentals // For summary stats
+        ]);
+    }
+    /**
+     * NEW: Efficiently refresh the status of all TVs.
+     */
+    public function refreshAllStatuses()
+    {
+        $results = $this->tvControlService->testAllConnections();
+        return response()->json($results);
     }
 
+    /**
+     * Show the form for creating a new rental.
+     */
     public function create(Request $request)
     {
-        // Pass TV IP and station info if provided via URL parameters
-        $tvIp = $request->get('tv_ip');
-        $station = $request->get('station');
-        
-        return view('rentals.create', compact('tvIp', 'station'));
-    }
+        $tvIp = $request->input('tv_ip');
+        $stationName = $request->input('station');
 
-    public function store(Request $request)
-    {
-        $request->validate([
-            'customer_name' => 'required|string|max:255',
-            'phone' => 'nullable|string|max:20',
-            'ps_station' => 'required|string|max:10',
-            'tv_ip' => 'required|ip',
-            'duration_minutes' => 'required|integer|min:1|max:480',
-            'price' => 'required|numeric|min:0'
-        ]);
+        // Get all configured TVs and filter out those that are already rented
+        $allTvs = $this->tvControlService->getConfiguredTvs();
+        $activeRentalIps = Rental::where('status', 'active')->pluck('tv_ip')->toArray();
+        $availableTvs = array_diff($allTvs, $activeRentalIps);
 
-        // Test TV connection first
-        if (!$this->tvControlService->testConnection($request->tv_ip)) {
-            return back()->withErrors(['tv_ip' => 'Cannot connect to TV at this IP address. Please check the connection and ensure ADB debugging is enabled.']);
-        }
-
-        $startTime = Carbon::now();
-        $durationMinutes = (int) $request->duration_minutes;
-        $endTime = $startTime->copy()->addMinutes($durationMinutes);
-
-        // Create the rental record
-        $rental = Rental::create([
-            'customer_name' => $request->customer_name,
-            'phone' => $request->phone,
-            'ps_station' => $request->ps_station,
-            'tv_ip' => $request->tv_ip,
-            'start_time' => $startTime,
-            'end_time' => $endTime,
-            'duration_minutes' => $durationMinutes,
-            'price' => (float) $request->price
-        ]);
-
-         // ✅ Record transaction
-        \App\Services\TransactionService::recordRentalTransaction($rental);
-        
-        // Execute rental start sequence - Switch TV to HDMI 2 for PlayStation
-        $startResult = $this->tvControlService->executeRentalStartSequence($request->tv_ip);
-        
-        if ($startResult['success']) {
-            return redirect()->route('rentals.index')
-                ->with('success', "Rental started for {$rental->customer_name} on {$rental->ps_station}! TV switched to HDMI 2 for PlayStation.");
-        } else {
-            return redirect()->route('rentals.index')
-                ->with('warning', "Rental started for {$rental->customer_name} but failed to switch TV input: {$startResult['error']}. Please manually switch to HDMI 2.");
-        }
-    }
-
-    // Updated extend method to handle both PATCH and POST requests
-    public function extend(Request $request, $rental = null)
-    {
-        // Handle both route parameter and ID in URL
-        if (is_null($rental)) {
-            $rental = Rental::findOrFail($request->route('id'));
-        } elseif (is_numeric($rental)) {
-            $rental = Rental::findOrFail($rental);
-        }
-
-        $request->validate([
-            'additional_minutes' => 'required|integer|min:1|max:240',
-            'additional_price' => 'required|numeric|min:0'
-        ]);
-
-        if ($rental->status !== 'active') {
-            if ($request->expectsJson()) {
-                return response()->json(['success' => false, 'message' => 'Cannot extend inactive rental']);
-            }
-            return back()->withErrors(['error' => 'Cannot extend inactive rental']);
-        }
-
-        $additionalMinutes = (int) $request->additional_minutes;
-        $additionalPrice = (float) $request->additional_price;
-
-        $rental->update([
-            'end_time' => $rental->end_time->addMinutes($additionalMinutes),
-            'duration_minutes' => $rental->duration_minutes + $additionalMinutes,
-            'price' => $rental->price + $additionalPrice
-        ]);
-
-        if ($request->expectsJson()) {
-            return response()->json([
-                'success' => true, 
-                'message' => "Rental extended by {$additionalMinutes} minutes! New end time: {$rental->end_time->format('H:i')}"
-            ]);
-        }
-
-        return back()->with('success', "Rental extended by {$additionalMinutes} minutes! New end time: {$rental->end_time->format('H:i')}");
-    }
-
-    // Updated complete method to handle both PATCH and POST requests
-    public function complete($rental = null)
-    {
-        // Handle both route parameter and ID in URL
-        if (is_null($rental)) {
-            $rental = Rental::findOrFail(request()->route('id'));
-        } elseif (is_numeric($rental)) {
-            $rental = Rental::findOrFail($rental);
-        }
-
-        $rental->update(['status' => 'completed']);
-        
-        if (request()->expectsJson()) {
-            return response()->json([
-                'success' => true, 
-                'message' => "Rental for {$rental->customer_name} completed successfully!"
-            ]);
-        }
-
-        return back()->with('success', "Rental for {$rental->customer_name} completed successfully!");
-    }
-
-    // Updated forceTimeout method to handle both route types
-    public function forceTimeout($id)
-    {
-        try {
-            $rental = Rental::findOrFail($id);
-            
-            // Update rental status first
-            $rental->update([
-                'end_time' => now(),
-                'status' => 'completed'
-            ]);
-
-            // Use the TvControlService instead of direct HTTP call
-            $result = $this->tvControlService->triggerRentalTimeout($rental->tv_ip, $rental->id);
-            
-            if ($result['success']) {
-                return response()->json([
-                    'success' => true,
-                    'message' => 'Rental ended successfully and timeout video is playing!'
-                ]);
-            } else {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Rental ended but video playback failed: ' . ($result['error'] ?? 'Unknown error')
-                ]);
-            }
-            
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Timeout failed: ' . $e->getMessage()
-            ]);
-        }
-    }
-
-    public function controlTv(Request $request)
-    {
-        try {
-            $tvIp = $request->input('tv_ip');
-            $action = $request->input('action');
-            
-            // Validate inputs
-            if (!$tvIp || !$action) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'TV IP and action are required'
-                ]);
-            }
-            
-            // Use TvControlService
-            $tvControlService = new \App\Services\TvControlService();
-            $result = $tvControlService->controlTv($tvIp, $action);
-            
-            return response()->json($result);
-            
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'TV control failed: ' . $e->getMessage()
-            ]);
-        }
-    }
-
-
-    public function updateEndTime(Request $request)
-    {
-        try {
-            $rental = Rental::find($request->rental_id);
-            if ($rental) {
-                $rental->end_time = $request->new_end_time;
-                $rental->save();
-                return response()->json(['success' => true]);
-            }
-            return response()->json(['success' => false, 'message' => 'Rental not found']);
-        } catch (\Exception $e) {
-            return response()->json(['success' => false, 'message' => 'Failed to update']);
-        }
-    }
-
-
-
-
-
-    
-
-
-    // Auto-check function for expired rentals - this runs automatically
-    public function autoCheck()
-    {
-        $expiredRentals = Rental::where('status', 'active')
-            ->where('end_time', '<=', Carbon::now())
-            ->get();
-
-        $results = [];
-        
-        foreach ($expiredRentals as $rental) {
-            // When rental expires, play timeout video
-            $result = $this->tvControlService->executeTimeoutSequence($rental->tv_ip);
-            
-            if ($result['success']) {
-                $rental->update(['status' => 'completed']);
-                $results[] = "✅ Timeout video playing for {$rental->customer_name} ({$rental->ps_station})";
-            } else {
-                $results[] = "❌ Failed timeout for {$rental->customer_name}: {$result['error']}";
-            }
-        }
-        
-        return response()->json([
-            'checked_at' => now(),
-            'expired_count' => $expiredRentals->count(),
-            'results' => $results
+        return view('rentals.create', [
+            'tv_ip' => $tvIp,
+            'station' => $stationName,
+            'availableTvs' => $availableTvs
         ]);
     }
 
     /**
-     * Test TV connection via AJAX - Enhanced for card interface
+     * Store a newly created rental in the database.
+     */
+    public function store(Request $request)
+    {
+        $validated = $request->validate([
+            'customer_name' => 'required|string|max:255',
+            'tv_ip' => 'required|ip',
+            'ps_station' => 'required|string',
+            'duration_minutes' => 'required|integer|min:1',
+            'price' => 'required|numeric|min:0',
+        ]);
+
+        // 1. Switch TV to HDMI before creating the rental record
+        $switchResult = $this->tvControlService->switchToHdmi($validated['tv_ip']);
+        if (!$switchResult['success']) {
+            return back()->with('warning', 'Failed to switch TV to HDMI input. Please check the TV and try again. Error: ' . $switchResult['error'])->withInput();
+        }
+
+        // 2. Create the rental record
+        $rental = Rental::create([
+            'customer_name' => $validated['customer_name'],
+            'tv_ip' => $validated['tv_ip'],
+            'ps_station' => $validated['ps_station'],
+            'duration_minutes' => $validated['duration_minutes'],
+            'price' => $validated['price'],
+            'start_time' => now(),
+            'end_time' => now()->addMinutes((int) $validated['duration_minutes']),
+            'status' => 'active',
+        ]);
+        
+        // 3. Record the transaction for accounting
+        TransactionService::recordRentalTransaction($rental);
+
+        // 4. Start the timeout monitor on the Python server
+        $this->tvControlService->startRentalMonitor($rental->tv_ip, $rental->id, $rental->duration_minutes * 60);
+
+        return redirect()->route('rentals.index')->with('success', 'Rental for ' . $rental->customer_name . ' started successfully!');
+    }
+    
+    /**
+     * Forcefully end a rental immediately and play the timeout video.
+     */
+    public function forceTimeout($rentalId)
+    {
+        $rental = Rental::findOrFail($rentalId);
+        
+        // 1. Tell the Python server to play the video
+        $result = $this->tvControlService->playTimeoutVideo($rental->tv_ip, $rental->id);
+        
+        // 2. Stop the server-side monitor for this rental
+        $this->tvControlService->stopRentalMonitor($rental->id);
+
+        // 3. Update the rental status in the database
+        $rental->update(['status' => 'completed', 'end_time' => now()]);
+
+        if ($result['success']) {
+            return response()->json(['success' => true, 'message' => 'Timeout video started and rental marked as completed.']);
+        }
+
+        // Return a message indicating video playback failed but the rental was still ended
+        return response()->json([
+            'success' => false, 
+            'message' => 'Rental completed, but failed to play timeout video: ' . $result['error']
+        ]);
+    }
+
+    /**
+     * Handle generic TV control commands (volume, power).
+     */
+    public function controlTv(Request $request)
+    {
+        $validated = $request->validate([
+            'tv_ip' => 'required|ip',
+            'action' => 'required|string|in:volume_up,volume_down,power_off',
+        ]);
+
+        $result = $this->tvControlService->sendControl($validated['tv_ip'], $validated['action']);
+        return response()->json($result);
+    }
+    
+    /**
+     * Test the ADB connection to a specific TV.
      */
     public function testConnection(Request $request)
     {
-        try {
-            $tvIp = $request->input('tv_ip');
-            
-            if (!$tvIp) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'TV IP is required'
-                ]);
-            }
-            
-            // Use the injected service (not new instance)
-            $result = $this->tvControlService->testConnection($tvIp);
-            
-            return response()->json($result);
-            
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Connection test failed: ' . $e->getMessage()
-            ]);
-        }
+        $validated = $request->validate(['tv_ip' => 'required|ip']);
+        $result = $this->tvControlService->testConnection($validated['tv_ip']);
+        return response()->json($result);
     }
 
     /**
-     * Test specific TV connection for card interface
+     * Extend the duration of an active rental.
      */
-    public function testTvConnection($tvIp)
-    {
-        $success = $this->tvControlService->testConnection($tvIp);
-        
-        return response()->json([
-            'success' => $success,
-            'message' => $success ? 'Connected' : 'Offline',
-            'tv_ip' => $tvIp,
-            'timestamp' => now()->toISOString()
-        ]);
-    }
+    public function extend(Request $request, $rentalId)
+{
+    $rental = Rental::findOrFail($rentalId);
+    $validated = $request->validate([
+        'additional_minutes' => 'required|integer|min:1',
+        'additional_price' => 'required|numeric|min:0',
+    ]);
 
-    /**
-     * Switch TV to PlayStation manually (HDMI 2)
-     */
-    public function switchToPlayStation(Rental $rental)
-    {
-        $result = $this->tvControlService->executeRentalStartSequence($rental->tv_ip);
-        
-        return response()->json([
-            'success' => $result['success'],
-            'message' => $result['success'] 
-                ? "TV switched to HDMI 2 for PlayStation on {$rental->ps_station}!" 
-                : "Failed to switch TV input: {$result['error']}"
-        ]);
-    }
-
-    /**
-     * Show cafe menu for specific station
-     */
-    public function showCafeMenu($station)
-    {
-        // Define menu items (you can move this to a database table later)
-        $menuItems = [
-            'food' => [
-                ['name' => 'Pizza Slice', 'price' => 5.00],
-                ['name' => 'Burger', 'price' => 8.00],
-                ['name' => 'Sandwich', 'price' => 6.00],
-                ['name' => 'Fries', 'price' => 3.00],
-            ],
-            'drinks' => [
-                ['name' => 'Soda', 'price' => 2.00],
-                ['name' => 'Coffee', 'price' => 3.00],
-                ['name' => 'Energy Drink', 'price' => 4.00],
-                ['name' => 'Water', 'price' => 1.00],
-            ]
-        ];
-
-        return response()->json([
-            'success' => true,
-            'station' => $station,
-            'menu' => $menuItems
-        ]);
-    }
+    // FIX: Use the existing Carbon instance and cast the input to an integer
+    $rental->end_time = $rental->end_time->addMinutes((int) $validated['additional_minutes']);
     
-    public function show(Rental $rental)
-    {
-        $rental->load(['cafeOrders.items.cafeItem']);
-        return view('rentals.show', compact('rental'));
-    }
+    $rental->duration_minutes += (int) $validated['additional_minutes'];
+    $rental->price += $validated['additional_price'];
+    $rental->save();
+    
+    // Stop the old monitor and start a new one with the updated duration
+    $newDurationSeconds = now()->diffInSeconds($rental->end_time);
+    $this->tvControlService->startRentalMonitor($rental->tv_ip, $rental->id, $newDurationSeconds);
+
+    return response()->json(['success' => true, 'message' => 'Rental extended successfully.']);
+}
 
     /**
-     * Create food order for station
+     * Mark a rental as completed manually.
      */
-    public function createFoodOrder(Request $request, $station)
+    public function complete(Request $request, $rentalId)
     {
-        // This is a placeholder - implement food ordering logic here
-        $request->validate([
-            'items' => 'required|array',
-            'total_price' => 'required|numeric|min:0'
-        ]);
-
-        // For now, just return success
-        // Later you can create a FoodOrder model and save to database
+        $rental = Rental::findOrFail($rentalId);
+        $rental->update(['status' => 'completed']);
         
-        return response()->json([
-            'success' => true,
-            'message' => "Food order created for {$station}",
-            'order_id' => 'FO-' . time(),
-            'station' => $station
-        ]);
+        // Stop the server-side monitor
+        $this->tvControlService->stopRentalMonitor($rental->id);
+        
+        return response()->json(['success' => true, 'message' => 'Rental marked as completed.']);
     }
 
     /**
-     * Get stations status for dashboard
+     * Display a paginated list of expired/completed rentals.
      */
-    public function stations()
-    {
-        $stations = [
-            [
-                'id' => 1,
-                'name' => 'PlayStation Station 1',
-                'tv_ip' => '192.168.1.20',
-                'tv_brand' => 'Xiaomi',
-                'status' => 'available'
-            ],
-            [
-                'id' => 2,
-                'name' => 'PlayStation Station 2',
-                'tv_ip' => '192.168.1.21',
-                'tv_brand' => 'TCL',
-                'status' => 'available'
-            ]
-        ];
-
-        // Check if stations have active rentals
-        $activeRentals = Rental::where('status', 'active')
-            ->where('end_time', '>', Carbon::now())
-            ->get();
-
-        foreach ($stations as &$station) {
-            $rental = $activeRentals->where('tv_ip', $station['tv_ip'])->first();
-            if ($rental) {
-                $station['status'] = 'occupied';
-                $station['rental'] = $rental;
-            }
-        }
-
-        return response()->json(['stations' => $stations]);
-    }
-
-    /**
-     * Refresh all stations status
-     */
-    public function refreshStations()
-    {
-        $stations = ['192.168.1.20', '192.168.1.21'];
-        $results = [];
-
-        foreach ($stations as $tvIp) {
-            $success = $this->tvControlService->testConnection($tvIp);
-            $results[$tvIp] = [
-                'connected' => $success,
-                'timestamp' => now()->toISOString()
-            ];
-        }
-
-        return response()->json([
-            'success' => true,
-            'results' => $results,
-            'message' => 'All stations refreshed'
-        ]);
-    }
-
-    /**
-     * Debug ADB connection (for troubleshooting)
-     */
-    public function debugConnection(Request $request)
-    {
-        $request->validate([
-            'tv_ip' => 'required|ip'
-        ]);
-
-        $tvIp = $request->tv_ip;
-        $debug = [];
-
-        try {
-            // Check if ADB is available
-            $adbVersionProcess = new Process([$this->adbPath, 'version']);
-            $adbVersionProcess->setTimeout(5);
-            $adbVersionProcess->run();
-            $debug['adb_available'] = $adbVersionProcess->isSuccessful();
-            $debug['adb_version'] = $adbVersionProcess->getOutput();
-            $debug['adb_path'] = $this->adbPath;
-            $debug['adb_exists'] = file_exists($this->adbPath);
-
-            // Check current devices
-            $devicesProcess = new Process([$this->adbPath, 'devices']);
-            $devicesProcess->setTimeout(5);
-            $devicesProcess->run();
-            $debug['current_devices'] = $devicesProcess->getOutput();
-            $debug['devices_command_success'] = $devicesProcess->isSuccessful();
-
-            // Try to connect to TV IP
-            $connectProcess = new Process([$this->adbPath, 'connect', "{$tvIp}:5555"]);
-            $connectProcess->setTimeout(10);
-            $connectProcess->run();
-            $debug['connect_output'] = $connectProcess->getOutput();
-            $debug['connect_error'] = $connectProcess->getErrorOutput();
-            $debug['connect_success'] = $connectProcess->isSuccessful();
-
-            // Wait a moment before checking devices again
-            sleep(1);
-
-            // Check devices after connect
-            $devicesAfterProcess = new Process([$this->adbPath, 'devices']);
-            $devicesAfterProcess->setTimeout(5);
-            $devicesAfterProcess->run();
-            $debug['devices_after_connect'] = $devicesAfterProcess->getOutput();
-            $debug['ip_found_in_devices'] = str_contains($devicesAfterProcess->getOutput(), $tvIp);
-
-            // Try a simple shell command if connected
-            if ($debug['ip_found_in_devices']) {
-                $shellTestProcess = new Process([$this->adbPath, '-s', "{$tvIp}:5555", 'shell', 'echo', 'hello']);
-                $shellTestProcess->setTimeout(5);
-                $shellTestProcess->run();
-                $debug['shell_test_output'] = $shellTestProcess->getOutput();
-                $debug['shell_test_success'] = $shellTestProcess->isSuccessful();
-            } else {
-                $debug['shell_test_success'] = false;
-                $debug['shell_test_output'] = 'Device not connected';
-            }
-
-            // Add service debug info
-            $debug['service_debug'] = $this->tvControlService->debugAdbPath();
-
-        } catch (\Exception $e) {
-            $debug['exception'] = $e->getMessage();
-        }
-
-        return response()->json($debug);
-    }
-
     public function expired()
     {
-        $expiredRentals = Rental::with(['cafeOrders.items.cafeItem']) // Load cafe orders for expired too
-            ->where('status', 'completed')
-            ->orWhere('end_time', '<', Carbon::now())
+        $expiredRentals = Rental::where('status', '!=', 'active')
             ->orderBy('end_time', 'desc')
-            ->get();
-
+            ->with('cafeOrders')
+            ->paginate(9); // 9 per page for a 3x3 grid
         return view('rentals.expired', compact('expiredRentals'));
     }
-
-    public function deleteExpired(Rental $rental)
-    {
-        try {
-            $rental->delete();
-            return response()->json(['success' => true]);
-        } catch (\Exception $e) {
-            return response()->json(['success' => false, 'error' => $e->getMessage()]);
-        }
-    }
-
-    public function clearAllExpired()
-    {
-        try {
-            $deleted = Rental::where('status', 'completed')
-                ->orWhere('end_time', '<', Carbon::now())
-                ->delete();
-                
-            return response()->json(['success' => true, 'deleted_count' => $deleted]);
-        } catch (\Exception $e) {
-            return response()->json(['success' => false, 'error' => $e->getMessage()]);
-        }
-    }
-
-    public function getActiveRentals()
-    {
-        try {
-            $activeRentals = Rental::where('status', 'active')
-                ->where('end_time', '>', Carbon::now())
-                ->select('id', 'end_time', 'tv_ip', 'customer_name', 'ps_station')
-                ->get();
-
-            return response()->json([
-                'success' => true,
-                'rentals' => $activeRentals
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'error' => $e->getMessage()
-            ], 500);
-        }
-    }
-
-    public function updateStatus(Rental $rental, Request $request)
-    {
-        try {
-            $rental->update(['status' => $request->status]);
-            
-            return response()->json([
-                'success' => true,
-                'rental' => $rental
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'error' => $e->getMessage()
-            ], 500);
-        }
-    }
-
-    public function getActiveRentalsPartial()
-    {
-        // Mark expired rentals as completed
-        Rental::where('status', 'active')
-            ->where('end_time', '<', Carbon::now())
-            ->update(['status' => 'completed']);
-
-        $activeRentals = Rental::where('status', 'active')
-            ->where('end_time', '>', Carbon::now())
-            ->orderBy('end_time', 'asc')
-            ->get();
-
-        return view('rentals._rentals_list', compact('activeRentals'))->render();
-    }
-
+    
     /**
-     * Test ADB path accessibility
+     * Show detailed information for a single rental (used for modals).
      */
-    public function testAdbPath()
+    public function show(Rental $rental)
     {
-        return response()->json($this->tvControlService->debugAdbPath());
+        $rental->load('cafeOrders.items.cafeItem');
+        return view('rentals.show', compact('rental'));
     }
-
+    
     /**
-     * System status check
+     * Get the rental history for a specific TV IP address.
      */
-    public function systemStatus()
+    public function historyByIp(Request $request, $tv_ip)
     {
-        $status = [
-            'adb_available' => file_exists($this->adbPath),
-            'active_rentals' => Rental::where('status', 'active')->count(),
-            'tv_connections' => [
-                '192.168.1.20' => $this->tvControlService->testConnection('192.168.1.20'),
-                '192.168.1.21' => $this->tvControlService->testConnection('192.168.1.21')
-            ],
-            'timestamp' => now()->toISOString()
-        ];
+        $query = Rental::where('tv_ip', $tv_ip)->orderBy('start_time', 'desc');
+        $rentals = $query->get();
+        $totalDuration = $rentals->sum('duration_minutes');
+        $totalHours = round($totalDuration / 60, 2);
 
-        return response()->json($status);
-    }
-
-    public function getActiveData()
-    {
-        $activeCount = Rental::where('status', 'active')->count();
-        $lastUpdate = Rental::latest('updated_at')->first();
-        
-        return response()->json([
-            'active_count' => $activeCount,
-            'last_update' => $lastUpdate ? $lastUpdate->updated_at->toISOString() : null,
-            'needsRefresh' => false // You can implement logic to determine if refresh is needed
+        return view('rentals.history', [
+            'tv' => (object)['ip_address' => $tv_ip],
+            'rentals' => $rentals,
+            'totalDuration' => $totalDuration,
+            'totalHours' => $totalHours,
         ]);
     }
 
- public function historyByIp(Request $request, $tv_ip)
-{
-    $query = Rental::where('tv_ip', $tv_ip);
-
-    // Search berdasarkan nama/keterangan
-    if ($request->has('search') && !empty($request->search)) {
-        $keyword = $request->search;
-
-        $query->where(function($q) use ($keyword) {
-            $q->where('customer_name', 'like', "%{$keyword}%")
-              ->orWhere('ps_station', 'like', "%{$keyword}%");
-        });
+    /**
+     * Get a unique list of all TV IPs that have ever had a rental.
+     */
+    public function ipList()
+    {
+        $ips = Rental::select('tv_ip')->distinct()->get();
+        return view('rentals.ip_list', compact('ips'));
     }
-
-    // Filter tanggal mulai
-    if ($request->has('start_date') && !empty($request->start_date)) {
-        $query->whereDate('start_time', '>=', $request->start_date);
+    
+    /**
+     * Update a rental's end time. Used for syncing countdowns after extending.
+     */
+    public function updateEndTime(Request $request)
+    {
+        $validated = $request->validate([
+            'rental_id' => 'required|exists:rentals,id',
+            'new_end_time' => 'required|date'
+        ]);
+        
+        $rental = Rental::find($validated['rental_id']);
+        $rental->end_time = $validated['new_end_time'];
+        $rental->save();
+        
+        return response()->json(['success' => true]);
     }
-
-    // Filter tanggal selesai
-    if ($request->has('end_date') && !empty($request->end_date)) {
-        $query->whereDate('end_time', '<=', $request->end_date);
-    }
-
-    $rentals = $query->orderBy('start_time', 'desc')->get();
-
-    $totalDuration = $rentals->sum('duration_minutes');
-    $totalHours = round($totalDuration / 60, 2);
-
-    return view('rentals.history', [
-        'tv' => (object)['ip_address' => $tv_ip],
-        'rentals' => $rentals,
-        'totalDuration' => $totalDuration,
-        'totalHours' => $totalHours,
-    ]);
-}
-
-
-
-public function ipList()
-{
-    // Ambil semua IP unik dari tabel rentals
-    $ips = Rental::select('tv_ip')->distinct()->get();
-
-    return view('rentals.ip_list', compact('ips'));
-}
-
 }

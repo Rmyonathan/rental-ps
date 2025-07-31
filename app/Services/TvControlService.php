@@ -1,5 +1,4 @@
 <?php
-// File: app/Services/TvControlService.php
 
 namespace App\Services;
 
@@ -8,358 +7,155 @@ use Illuminate\Support\Facades\Log;
 
 class TvControlService
 {
-    private string $adbServerUrl = 'http://localhost:3001';
+    protected $baseUrl;
 
-    /**
-     * Execute rental start sequence - Switch TV to HDMI 2 for PlayStation
-     */
-    public function executeRentalStartSequence(string $tvIp): array
+    public function __construct()
     {
-        Log::info("Executing rental start sequence for TV: {$tvIp}");
-
-        // First ensure connection
-        $connectionResult = $this->connectToTv($tvIp);
-        if (!$connectionResult['success']) {
-            return ['success' => false, 'error' => 'Failed to connect to TV: ' . $connectionResult['error']];
-        }
-
-        // Switch to HDMI 2
-        $switchResult = $this->switchToHdmi2($tvIp);
-        if (!$switchResult['success']) {
-            return ['success' => false, 'error' => 'Failed to switch to HDMI 2: ' . $switchResult['error']];
-        }
-
-        Log::info("Rental start sequence completed successfully for {$tvIp}");
-        return ['success' => true, 'message' => 'TV switched to HDMI 2 for PlayStation'];
+        // The base URL of the Python ADB API server from your .env file or config
+        $this->baseUrl = config('services.adb_api.url', 'http://localhost:3001');
     }
 
     /**
-     * Execute timeout sequence - Play timeout video when rental ends
+     * The single, centralized method for sending requests to the Python ADB API.
+     *
+     * @param string $method HTTP method ('get', 'post')
+     * @param string $endpoint The API endpoint (e.g., '/health')
+     * @param array $data The data payload for the request
+     * @return array The JSON response as an associative array
      */
-    public function executeTimeoutSequence(string $tvIp): array
-    {
-        Log::info("Executing timeout sequence for TV: {$tvIp}");
-
-        // First ensure connection
-        $connectionResult = $this->connectToTv($tvIp);
-        if (!$connectionResult['success']) {
-            return ['success' => false, 'error' => 'Failed to connect to TV: ' . $connectionResult['error']];
-        }
-
-        // Play timeout video
-        $videoResult = $this->playTimeoutVideo($tvIp);
-        if (!$videoResult['success']) {
-            return ['success' => false, 'error' => 'Failed to play timeout video: ' . $videoResult['error']];
-        }
-
-        Log::info("Timeout sequence completed for {$tvIp}");
-        return ['success' => true, 'message' => 'Timeout video is now playing'];
-    }
-
-    /**
-     * Connect to TV via ADB Server
-     */
-    private function connectToTv(string $tvIp): array
+    protected function sendRequest(string $method, string $endpoint, array $data = []): array
     {
         try {
-            Log::info("Connecting to TV: {$tvIp}");
-            
-            $response = Http::timeout(20)->post("{$this->adbServerUrl}/connect-tv", [
-                'tv_ip' => $tvIp
-            ]);
+            $response = Http::timeout(20) // Set a generous 20-second timeout
+                ->{$method}($this->baseUrl . $endpoint, $data);
 
-            if ($response->successful()) {
-                $data = $response->json();
-                Log::info("Connection result: " . json_encode($data));
-                return $data;
-            } else {
-                Log::error("HTTP request failed: " . $response->status());
-                return ['success' => false, 'error' => 'HTTP request failed: ' . $response->status()];
+            if ($response->failed()) {
+                $errorDetails = $response->json('error', 'An unknown HTTP error occurred.');
+                Log::error("ADB API Error: Failed to call {$endpoint}", [
+                    'status' => $response->status(),
+                    'response' => $response->body(),
+                    'data' => $data
+                ]);
+                return ['success' => false, 'error' => $errorDetails];
             }
+
+            // Return the JSON response, or an empty array if the body is empty
+            return $response->json() ?? [];
+        } catch (\Illuminate\Http\Client\ConnectionException $e) {
+            Log::error("ADB API ConnectionException: Could not connect to the Python server at {$this->baseUrl}", [
+                'exception' => $e->getMessage()
+            ]);
+            return ['success' => false, 'error' => 'Connection refused. Is the Python ADB server running?'];
         } catch (\Exception $e) {
-            Log::error("Exception connecting to TV: " . $e->getMessage());
-            return ['success' => false, 'error' => $e->getMessage()];
+            Log::error("ADB API Generic Exception: An error occurred.", [
+                'exception' => $e->getMessage()
+            ]);
+            return ['success' => false, 'error' => 'An unexpected error occurred: ' . $e->getMessage()];
         }
     }
 
-    /**
-     * Switch TV to HDMI 2 input
-     */
-    private function switchToHdmi2(string $tvIp): array
+    // --- Core Rental Flow Methods ---
+
+    public function switchToHdmi(string $tvIp): array
     {
-        try {
-            Log::info("Switching TV {$tvIp} to HDMI 2");
-
-            $response = Http::timeout(15)->post("{$this->adbServerUrl}/switch-to-hdmi2", [
-                'tv_ip' => $tvIp
-            ]);
-
-            if ($response->successful()) {
-                $data = $response->json();
-                Log::info("HDMI switch result: " . json_encode($data));
-                return $data;
-            } else {
-                return ['success' => false, 'error' => 'HTTP request failed: ' . $response->status()];
-            }
-        } catch (\Exception $e) {
-            Log::error("HDMI switch error: " . $e->getMessage());
-            return ['success' => false, 'error' => $e->getMessage()];
-        }
+        return $this->sendRequest('post', '/switch-to-hdmi2', ['tv_ip' => $tvIp]);
     }
 
-    /**
-     * Play the timeout video
-     */
-    private function playTimeoutVideo(string $tvIp): array
+    public function playTimeoutVideo(string $tvIp, int $rentalId): array
     {
-        try {
-            Log::info("Playing timeout video on TV {$tvIp}");
-
-            $response = Http::timeout(15)->post("{$this->adbServerUrl}/play-timeout-video", [
-                'tv_ip' => $tvIp
-            ]);
-
-            if ($response->successful()) {
-                $data = $response->json();
-                Log::info("Video play result: " . json_encode($data));
-                return $data;
-            } else {
-                return ['success' => false, 'error' => 'HTTP request failed: ' . $response->status()];
-            }
-        } catch (\Exception $e) {
-            Log::error("Video play error: " . $e->getMessage());
-            return ['success' => false, 'error' => $e->getMessage()];
-        }
+        return $this->sendRequest('post', '/play-timeout-video', [
+            'tv_ip' => $tvIp,
+            'rental_id' => $rentalId
+        ]);
     }
+    
+    // --- TV & Server Management Methods ---
 
-    /**
-     * Send a key event to the TV
-     */
-    public function sendKeyEvent(string $tvIp, int $keycode): array
-    {
-        try {
-            $response = Http::timeout(10)->post("{$this->adbServerUrl}/send-key", [
-                'tv_ip' => $tvIp,
-                'keycode' => $keycode
-            ]);
-
-            if ($response->successful()) {
-                return $response->json();
-            } else {
-                return ['success' => false, 'error' => 'HTTP request failed: ' . $response->status()];
-            }
-        } catch (\Exception $e) {
-            return ['success' => false, 'error' => $e->getMessage()];
-        }
-    }
-
-    /**
-     * Test connection to TV
-     */
     public function testConnection(string $tvIp): array
     {
-        try {
-            // Use TV-specific test endpoint
-            $endpoint = $tvIp === '192.168.1.20' ? '/test-xiaomi' : '/test-tcl';
-            
-            $response = Http::timeout(30)->post("{$this->adbServerUrl}{$endpoint}", [
-                'tv_ip' => $tvIp
-            ]);
-            
-            if ($response->successful()) {
-                $data = $response->json();
-                return [
-                    'success' => $data['success'] ?? false,
-                    'message' => $data['message'] ?? $data['error'] ?? 'Unknown status'
-                ];
-            } else {
-                return [
-                    'success' => false,
-                    'message' => 'Failed to communicate with ADB server'
-                ];
-            }
-        } catch (\Exception $e) {
-            return [
-                'success' => false,
-                'message' => 'Connection test error: ' . $e->getMessage()
-            ];
-        }
+        return $this->sendRequest('post', '/test-connection', ['tv_ip' => $tvIp]);
+    }
+    
+    public function sendControl(string $tvIp, string $action): array
+    {
+        return $this->sendRequest('post', '/tv-control', [
+            'tv_ip' => $tvIp,
+            'action' => $action
+        ]);
     }
 
-
+    public function getApiHealth(): array
+    {
+        return $this->sendRequest('get', '/health');
+    }
+    
+    public function getConfiguredTvs(): array
+    {
+        $health = $this->getApiHealth();
+        
+        // --- FIX: Check for 'status' key instead of 'success' ---
+        if (isset($health['status']) && isset($health['configured_tvs'])) {
+            $tvIps = [];
+            // Filter to ensure only valid IPs are returned
+            foreach ($health['configured_tvs'] as $ip) {
+                if (filter_var($ip, FILTER_VALIDATE_IP)) {
+                    $tvIps[] = $ip;
+                }
+            }
+            return $tvIps;
+        }
+        
+        // Return an empty array if the health check fails or the structure is wrong
+        return [];
+    }
 
     /**
-     * Get current connected devices
+     * Efficiently tests all TVs at once.
      */
+    public function testAllConnections(): array
+    {
+        return $this->sendRequest('post', '/test-all-connections');
+    }
+
     public function getConnectedDevices(): array
     {
-        try {
-            $response = Http::timeout(10)->get("{$this->adbServerUrl}/devices");
-
-            if ($response->successful()) {
-                return $response->json();
-            } else {
-                return ['success' => false, 'error' => 'HTTP request failed: ' . $response->status()];
-            }
-        } catch (\Exception $e) {
-            return ['success' => false, 'error' => $e->getMessage()];
-        }
+        return $this->sendRequest('get', '/devices');
     }
 
-    /**
-     * Restart ADB daemon
-     */
     public function restartAdbDaemon(): array
     {
-        try {
-            Log::info("Restarting ADB daemon via server");
-
-            $response = Http::timeout(20)->post("{$this->adbServerUrl}/restart-adb");
-
-            if ($response->successful()) {
-                $data = $response->json();
-                Log::info("ADB restart result: " . json_encode($data));
-                return $data;
-            } else {
-                return ['success' => false, 'error' => 'HTTP request failed: ' . $response->status()];
-            }
-        } catch (\Exception $e) {
-            Log::error("ADB restart error: " . $e->getMessage());
-            return ['success' => false, 'error' => $e->getMessage()];
-        }
+        Log::info("Requesting ADB daemon restart via API.");
+        return $this->sendRequest('post', '/restart-adb');
+    }
+    
+    public function sendKeyEvent(string $tvIp, int $keycode): array
+    {
+        return $this->sendRequest('post', '/send-key', [
+            'tv_ip' => $tvIp,
+            'keycode' => $keycode
+        ]);
     }
 
-    public function playTimeoutVideoOnly(string $tvIp): array
+    // --- Monitoring Methods ---
+
+    public function startRentalMonitor(string $tvIp, int $rentalId, int $durationInSeconds): array
     {
-        Log::info("Playing timeout video directly on TV: {$tvIp}");
-
-        try {
-            // First ensure connection
-            $connectionResult = $this->connectToTv($tvIp);
-            if (!$connectionResult['success']) {
-                return ['success' => false, 'error' => 'Failed to connect to TV: ' . $connectionResult['error']];
-            }
-
-            // Play timeout video with extended timeout
-            $response = Http::timeout(30)->post("{$this->adbServerUrl}/play-timeout-video", [
-                'tv_ip' => $tvIp
-            ]);
-
-            if ($response->successful()) {
-                $data = $response->json();
-                Log::info("Direct timeout video result: " . json_encode($data));
-                return $data;
-            } else {
-                return ['success' => false, 'error' => 'HTTP request failed: ' . $response->status()];
-            }
-        } catch (\Exception $e) {
-            Log::error("Direct timeout video error: " . $e->getMessage());
-            return ['success' => false, 'error' => $e->getMessage()];
-        }
-    }
-
-    /**
-     * Test ADB server health
-     */
-    public function testAdbServer(): array
-    {
-        try {
-            $response = Http::timeout(5)->get("{$this->adbServerUrl}/health");
-
-            if ($response->successful()) {
-                return $response->json();
-            } else {
-                return ['success' => false, 'error' => 'ADB Server not responding'];
-            }
-        } catch (\Exception $e) {
-            return ['success' => false, 'error' => 'Cannot connect to ADB Server: ' . $e->getMessage()];
-        }
+        return $this->sendRequest('post', '/start-rental-monitor', [
+            'tv_ip' => $tvIp,
+            'rental_id' => $rentalId,
+            'timeout_seconds' => $durationInSeconds
+        ]);
     }
 
     public function stopRentalMonitor(int $rentalId): array
     {
-        try {
-            $response = Http::timeout(10)->post("{$this->adbServerUrl}/stop-rental-monitor/{$rentalId}");
-            return $response->successful() ? $response->json() : ['success' => false, 'error' => 'Failed to stop monitor'];
-        } catch (\Exception $e) {
-            Log::error("Failed to stop rental monitor: " . $e->getMessage());
-            return ['success' => false, 'error' => $e->getMessage()];
-        }
+        return $this->sendRequest('post', "/stop-rental-monitor/{$rentalId}");
     }
-
-    public function triggerRentalTimeout(string $tvIp, int $rentalId): array
-    {
-        try {
-            // Use the same endpoint that normal timeout uses
-            $response = Http::timeout(60)->post("{$this->adbServerUrl}/rental-timeout", [
-                'tv_ip' => $tvIp,
-                'rental_id' => $rentalId
-            ]);
-
-            if ($response->successful()) {
-                return $response->json();
-            } else {
-                return ['success' => false, 'error' => 'Timeout trigger failed: ' . $response->status()];
-            }
-        } catch (\Exception $e) {
-            Log::error("Trigger timeout error: " . $e->getMessage());
-            return ['success' => false, 'error' => $e->getMessage()];
-        }
-    }
-
-    public function controlTv(string $tvIp, string $action): array
-    {
-        try {
-            $response = Http::timeout(30)->post("{$this->adbServerUrl}/tv-control", [
-                'tv_ip' => $tvIp,
-                'action' => $action
-            ]);
-            
-            if ($response->successful()) {
-                $data = $response->json();
-                return [
-                    'success' => $data['success'] ?? true,
-                    'message' => $data['message'] ?? 'TV control executed successfully'
-                ];
-            } else {
-                return [
-                    'success' => false,
-                    'message' => 'Failed to communicate with ADB server'
-                ];
-            }
-            
-        } catch (\Exception $e) {
-            return [
-                'success' => false,
-                'message' => 'TV control error: ' . $e->getMessage()
-            ];
-        }
-    }
-
-
     
-
-    /**
-     * Debug ADB server connection
-     */
+    // --- Debugging Methods ---
+    
     public function debugAdbPath(): array
     {
-        try {
-            // Test server health
-            $healthResponse = Http::timeout(5)->get("{$this->adbServerUrl}/health");
-            $testResponse = Http::timeout(10)->get("{$this->adbServerUrl}/test-adb");
-
-            return [
-                'server_url' => $this->adbServerUrl,
-                'server_health' => $healthResponse->successful() ? $healthResponse->json() : ['error' => 'Server not responding'],
-                'adb_test' => $testResponse->successful() ? $testResponse->json() : ['error' => 'ADB test failed']
-            ];
-        } catch (\Exception $e) {
-            return [
-                'server_url' => $this->adbServerUrl,
-                'error' => $e->getMessage(),
-                'suggestion' => 'Make sure to start the Node.js ADB server: node adb-server.js'
-            ];
-        }
+        return $this->sendRequest('get', '/test-adb');
     }
 }

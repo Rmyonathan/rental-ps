@@ -105,7 +105,7 @@
                 <i class="bi bi-controller"></i> PlayStation Rental Manager
             </a>
             <div class="navbar-nav ms-auto">
-                <a class="nav-link" href="{{ route('rental.iplist') }}">
+                <a class="nav-link" href="{{ route('rentals.ip-list') }}">
                     <i class="bi bi-clock-history"></i> History Peminjaman
                 </a>
                 <a class="nav-link" href="{{ route('rentals.index') }}">

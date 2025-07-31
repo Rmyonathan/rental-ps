@@ -21,7 +21,7 @@
                     <td>{{ $index + 1 }}</td>
                     <td>{{ $ip->tv_ip }}</td>
                     <td>
-                        <a href="{{ route('rental.history', $ip->tv_ip) }}" class="btn btn-primary btn-sm">
+                        <a href="{{ route('rentals.history', $ip->tv_ip) }}" class="btn btn-primary btn-sm">
                             Lihat Riwayat
                         </a>
                     </td>
