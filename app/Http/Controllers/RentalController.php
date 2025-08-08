@@ -276,4 +276,29 @@ class RentalController extends Controller
         
         return response()->json(['success' => true]);
     }
+    // // NEW: Add this function to handle switching HDMI inputs.
+    public function switchHdmi(Request $request)
+    {
+        $validated = $request->validate([
+            'tv_ip' => 'required|ip',
+            'hdmi_input' => 'required|string|in:hdmi1,hdmi2',
+        ]);
+
+        $result = $this->tvControlService->switchHdmiInput(
+            $validated['tv_ip'],
+            $validated['hdmi_input']
+        );
+
+        return response()->json($result);
+    }
+
+    // // NEW: Add this function to handle getting the HDMI status.
+    public function getHdmiStatus(Request $request)
+    {
+        $validated = $request->validate(['tv_ip' => 'required|ip']);
+
+        $result = $this->tvControlService->getHdmiStatus($validated['tv_ip']);
+
+        return response()->json($result);
+    }
 }

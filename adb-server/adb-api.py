@@ -2,10 +2,11 @@
 """
 FastAPI ADB Control Server
 A lightweight, scalable, and configurable Python server for managing Android TVs.
-Version: 2.2.0 - Complete Feature Set
+Version: 2.4.0 - Enhanced HDMI Control
 """
 
 import asyncio
+import re
 import subprocess
 from datetime import datetime
 from typing import Optional, Dict, Any, List
@@ -168,6 +169,29 @@ TV_CONFIGS = {
             "sleep 1",
             "input keyevent 23"    # DPAD_CENTER (Selects the input)
         ],
+        # // NEW: Direct command sequences for each HDMI input.
+        # This is exactly what you specified: Open Menu, Navigate, Select.
+        "hdmi_switch_sequences": {
+            "hdmi1": [
+                "input keyevent 178",  # Open TV Input source menu
+                "sleep 2",
+                "input keyevent 21",   # DPAD_LEFT
+                "sleep 1",
+                "input keyevent 23"    # DPAD_CENTER (Select)
+            ],
+            "hdmi2": [
+                "input keyevent 178",  # Open TV Input source menu
+                "sleep 2",
+                "input keyevent 22",   # DPAD_RIGHT
+                "sleep 1",
+                "input keyevent 23"    # DPAD_CENTER (Select)
+            ]
+        },
+        # // NEW: This is still needed for the status check feature.
+        "hdmi_status_map": {
+            "com.tcl.tvinput/tcl.hdmi.HDMIInputService/HW15": "hdmi1",
+            "com.tcl.tvinput/tcl.hdmi.HDMIInputService/HW16": "hdmi2"
+        },
         # Command for playing video on TCL TVs
         "play_video_commands": [
             'am start -a android.intent.action.VIEW -d "file://{video_path}" -t "video/*" org.videolan.vlc'
@@ -197,7 +221,7 @@ for ip in TCL_TV_IPS:
 app = FastAPI(
     title="ADB Control Server",
     description="A scalable FastAPI server for controlling Android TVs via ADB.",
-    version="2.2.0"
+    version="2.4.0" # // Version updated
 )
 
 # Allow Cross-Origin Resource Sharing (CORS) for communication with the Laravel frontend
@@ -240,6 +264,14 @@ class BaseResponse(BaseModel):
 
 class DevicesResponse(BaseResponse):
     devices: Optional[str] = None
+
+# // NEW: A request model for the new functions
+class SetHDMIRequest(TVRequest):
+    target_input: str  # This will be 'hdmi1' or 'hdmi2'
+
+# // NEW: A response model for the status checking function
+class HDMIStatusResponse(BaseResponse):
+    hdmi_status: Optional[str] = None
 
 # ==============================================================================
 # --- CORE ADB & HELPER FUNCTIONS ---
@@ -290,6 +322,27 @@ async def execute_command_sequence(tv_ip: str, commands: List[str]):
             if not result["success"]:
                 return result  # Stop and return on the first error
     return {"success": True}
+
+# // NEW: This is the internal logic for the /get-hdmi-status endpoint
+async def get_hdmi_status_internal(tv_ip: str) -> Dict[str, Any]:
+    config = get_tv_config(tv_ip)
+    status_map = config.get("hdmi_status_map", {})
+
+    command = f'-s {tv_ip}:5555 shell "dumpsys window windows | grep mCurrentFocus"'
+    result = await execute_adb_command(command)
+
+    if not result["success"]:
+        return {"success": False, "error": result.get("error")}
+
+    raw_output = result.get("output", "")
+    match = re.search(r'\{[^{}]+\s([^\s/]+/[^}\s]+)\}', raw_output)
+
+    if match:
+        focused_component = match.group(1)
+        status = status_map.get(focused_component, "Unknown")
+        return {"success": True, "hdmi_status": status}
+    else:
+        return {"success": True, "hdmi_status": "home_or_other"}
 
 # ==============================================================================
 # --- RENTAL MONITORING & SSE (Server-Sent Events) ---
@@ -553,9 +606,45 @@ async def test_all_tv_connections():
     results = await asyncio.gather(*tasks)
     return dict(results)
 
+# // NEW: This is the /get-hdmi-status endpoint your frontend will call.
+@app.post("/get-hdmi-status", response_model=HDMIStatusResponse)
+async def get_hdmi_status_endpoint(request: TVRequest):
+    """Gets the current active HDMI input for a specific TV."""
+    status_result = await get_hdmi_status_internal(request.tv_ip)
+    if not status_result["success"]:
+        return HDMIStatusResponse(success=False, error=status_result.get("error"))
+
+    return HDMIStatusResponse(
+        success=True,
+        message="Successfully retrieved HDMI status.",
+        hdmi_status=status_result.get("hdmi_status"),
+    )
+
+# // NEW: This is the /set-hdmi-input endpoint that your Laravel app will call.
+@app.post("/set-hdmi-input", response_model=BaseResponse)
+async def set_hdmi_input(request: SetHDMIRequest):
+    """Switches the TV to a target HDMI input by executing a predefined command sequence."""
+    config = get_tv_config(request.tv_ip)
+    target_input = request.target_input
+
+    # 1. Get the correct command sequence from the config
+    command_sequence = config.get("hdmi_switch_sequences", {}).get(target_input)
+
+    if not command_sequence:
+        return BaseResponse(success=False, error=f"No HDMI switch sequence found for '{target_input}'.")
+
+    # 2. Execute the sequence
+    result = await execute_command_sequence(request.tv_ip, command_sequence)
+
+    if not result["success"]:
+        return BaseResponse(success=False, error=f"Failed to switch to {target_input}: {result.get('error')}")
+
+    return BaseResponse(success=True, message=f"TV {request.tv_ip} switched to {target_input}.")
+
+
 if __name__ == "__main__":
     print("=============================================")
-    print("🚀 ADB CONTROL SERVER v2.2 🚀")
+    print("🚀 ADB CONTROL SERVER v2.4 🚀")
     print("=============================================")
     print(f"📱 ADB Path: {ADB_PATH}")
     print(f"🌐 Server will run on http://localhost:{PORT}")

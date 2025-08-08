@@ -90,8 +90,23 @@
                             <p>Ready for new rental</p>
                         </div>
                     @endif
+
+                     <!-- // NEW: Add this entire block for HDMI controls -->
+                    @php
+                        $switchableTvs = ['192.168.1.31', '192.168.1.34', '192.168.1.36', '192.168.1.40'];
+                    @endphp
+                    @if($station->rental && in_array($station->ip, $switchableTvs))
+                        <div class="hdmi-controls-container mt-3 pt-3 border-top">
+                            <h6 class="text-muted">HDMI Control</h6>
+                            <p id="hdmi-status-{{ str_replace('.', '-', $station->ip) }}">Status: Checking...</p>
+                            <div class="btn-group w-100">
+                                <button class="btn btn-sm btn-outline-primary hdmi-switch-btn" data-target="hdmi1">HDMI 1 (PS)</button>
+                                <button class="btn btn-sm btn-outline-secondary hdmi-switch-btn" data-target="hdmi2">HDMI 2 (NS)</button>
+                            </div>
+                        </div>
+                    @endif
                 </div>
-                
+                    
                 <div class="card-footer bg-light">
                     <div class="btn-group w-100 mb-2" role="group">
                         <button type="button" class="btn btn-outline-secondary btn-sm" onclick="controlTv('{{ $station->ip }}', 'volume_up')" title="Volume Up"><i class="bi bi-volume-up"></i></button>
@@ -168,6 +183,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Refresh all station statuses at once on page load
     refreshAllStations();
+    initAllHdmiControls();
     
     // Handle extend modal price update and form submission
     const extendForm = document.getElementById('extendForm');
@@ -371,6 +387,105 @@ async function controlTv(tvIp, action) {
             button.disabled = false;
             button.innerHTML = originalContent;
         }, 1000);
+    }
+}
+
+function initAllHdmiControls() {
+    const switchableTvs = ['192.168.1.31', '192.168.1.34', '192.168.1.36', '192.168.1.40'];
+    
+    document.querySelectorAll('.station-card').forEach(card => {
+        const tvIp = card.dataset.tvIp;
+        if (switchableTvs.includes(tvIp)) {
+            // Fetch initial status for this TV
+            updateHdmiStatus(tvIp);
+            
+            // Add click listeners to its buttons
+            card.querySelectorAll('.hdmi-switch-btn').forEach(button => {
+                button.addEventListener('click', () => {
+                    const targetInput = button.dataset.target;
+                    handleSwitchHdmi(tvIp, targetInput);
+                });
+            });
+
+            // Set an interval to refresh the status periodically for this TV
+            setInterval(() => updateHdmiStatus(tvIp), 30000);
+        }
+    });
+}
+
+/**
+ * Fetches the current HDMI status for a single TV and updates its display.
+ * @param {string} tvIp - The IP address of the TV to check.
+ */
+async function updateHdmiStatus(tvIp) {
+    const statusEl = document.getElementById(`hdmi-status-${tvIp.replace(/\./g, '-')}`);
+    if (!statusEl) return;
+    
+    statusEl.textContent = 'Status: Checking...';
+
+    try {
+        const response = await fetch('{{ route("tv.get-hdmi-status") }}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-TOKEN': '{{ csrf_token() }}'
+            },
+            body: JSON.stringify({ tv_ip: tvIp })
+        });
+        const result = await response.json();
+        if (result.success) {
+            const status = result.hdmi_status || 'Unknown';
+            statusEl.textContent = `Status: Currently on ${status.toUpperCase()}`;
+        } else {
+            statusEl.textContent = `Status: Error.`;
+        }
+    } catch (error) {
+        console.error(`Error fetching HDMI status for ${tvIp}:`, error);
+        statusEl.textContent = 'Status: Network error.';
+    }
+}
+
+/**
+ * Handles the click event for switching HDMI inputs for a specific TV.
+ * @param {string} tvIp - The IP address of the TV to switch.
+ * @param {string} targetInput - The desired input, e.g., 'hdmi1'.
+ */
+async function handleSwitchHdmi(tvIp, targetInput) {
+    const card = document.querySelector(`.station-card[data-tv-ip="${tvIp}"]`);
+    if (!card) return;
+
+    const buttons = card.querySelectorAll('.hdmi-switch-btn');
+    const statusEl = card.querySelector(`#hdmi-status-${tvIp.replace(/\./g, '-')}`);
+
+    buttons.forEach(btn => btn.disabled = true);
+    if(statusEl) statusEl.textContent = `Switching to ${targetInput.toUpperCase()}...`;
+
+    try {
+        const response = await fetch('{{ route("tv.switch-hdmi") }}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-TOKEN': '{{ csrf_token() }}'
+            },
+            body: JSON.stringify({
+                tv_ip: tvIp,
+                hdmi_input: targetInput
+            })
+        });
+        const result = await response.json();
+        if (result.success) {
+            // Wait for the TV to process the command, then update status
+            setTimeout(() => updateHdmiStatus(tvIp), 3000);
+        } else {
+            alert(`Error switching TV ${tvIp}: ${result.error || 'Unknown error'}`);
+            updateHdmiStatus(tvIp); // Re-check status on failure
+        }
+    } catch (error) {
+        console.error(`Error switching HDMI for ${tvIp}:`, error);
+        alert('A network error occurred.');
+        updateHdmiStatus(tvIp);
+    } finally {
+        buttons.forEach(btn => btn.disabled = false);
     }
 }
 </script>

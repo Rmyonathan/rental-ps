@@ -45,6 +45,10 @@ Route::controller(RentalController::class)->group(function () {
     Route::post('/rentals/update-end-time', 'updateEndTime')->name('rentals.update-end-time');
     Route::post('/rentals/refresh-all-statuses', 'refreshAllStatuses')->name('rentals.refresh-all');
 
+    // // NEW: Add these two routes for handling HDMI control.
+    Route::post('/tv/switch-hdmi', 'switchHdmi')->name('tv.switch-hdmi');
+    Route::post('/tv/get-hdmi-status', 'getHdmiStatus')->name('tv.get-hdmi-status');
+
 });
 
 // --- Cafe & Stock Management ---

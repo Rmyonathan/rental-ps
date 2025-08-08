@@ -158,4 +158,17 @@ class TvControlService
     {
         return $this->sendRequest('get', '/test-adb');
     }
+    public function switchHdmiInput(string $tvIp, string $hdmiInput): array
+    {
+        return $this->sendRequest('post', '/set-hdmi-input', [
+            'tv_ip' => $tvIp,
+            'target_input' => $hdmiInput,
+        ]);
+    }
+
+    // // NEW: Add this function to get the current HDMI status
+    public function getHdmiStatus(string $tvIp): array
+    {
+        return $this->sendRequest('post', '/get-hdmi-status', ['tv_ip' => $tvIp]);
+    }
 }
