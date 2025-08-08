@@ -22,7 +22,7 @@ import json
 # ==============================================================================
 
 # Set the full path to your ADB executable file
-ADB_PATH = r"C:\Users\yonat\platform-tools\adb.exe"
+ADB_PATH = r"C:\Users\LOQ 15\Downloads\platform-tools-latest-windows\platform-tools\adb.exe"
 
 # Set the network port for this server to run on
 PORT = 3001
@@ -39,8 +39,6 @@ TV_CONFIGS = {
         "hdmi_switch_commands": [
             "input keyevent 178",  # Open TV Input source menu
             "sleep 2",             # Wait for the menu to appear
-            "input keyevent 20",   # DPAD_DOWN
-            "sleep 1",
             "input keyevent 20",   # DPAD_DOWN
             "sleep 1",
             "input keyevent 20",   # DPAD_DOWN
@@ -76,6 +74,83 @@ TV_CONFIGS = {
             'am start -a android.intent.action.VIEW -d "file://{video_path}" -t "video/*" org.videolan.vlc'
         ]
     },
+
+    # Make 192.168.1.37 behave like 192.168.1.35 (down x4 input sequence)
+    "192.168.1.37": {
+        "model": "tcl-special",
+        "video_path": "/sdcard/Movies/hot.mp4",
+        "hdmi_switch_commands": [
+            "input keyevent 178",  # Open TV Input source menu
+            "sleep 2",             # Wait for the menu to appear
+            "input keyevent 20",   # DPAD_DOWN
+            "sleep 1",
+            "input keyevent 20",   # DPAD_DOWN
+            "sleep 1",
+            "input keyevent 20",   # DPAD_DOWN
+            "sleep 1",
+            "input keyevent 20",   # DPAD_DOWN
+            "sleep 1",
+            "input keyevent 23"    # DPAD_CENTER
+        ],
+        "play_video_commands": [
+            'am start -a android.intent.action.VIEW -d "file://{video_path}" -t "video/*" org.videolan.vlc'
+        ]
+    },
+
+    "192.168.1.38": {
+        "model": "tcl-special",
+        "video_path": "/sdcard/Movies/hot.mp4",
+        "hdmi_switch_commands": [
+            "input keyevent 178",  # Open TV Input source menu
+            "sleep 2",             # Wait for the menu to appear
+            "input keyevent 20",   # DPAD_DOWN
+            "sleep 1",
+            "input keyevent 20",   # DPAD_DOWN
+            "sleep 1",
+            "input keyevent 20",   # DPAD_DOWN
+            "sleep 1",
+            "input keyevent 20",   # DPAD_DOWN
+            "sleep 1",
+            "input keyevent 23"    # DPAD_CENTER
+        ],
+        "play_video_commands": [
+            'am start -a android.intent.action.VIEW -d "file://{video_path}" -t "video/*" org.videolan.vlc'
+        ]
+    },
+
+    "192.168.1.39": {
+        "model": "tcl-special",
+        "video_path": "/sdcard/Movies/hot.mp4",
+        "hdmi_switch_commands": [
+            "input keyevent 178",  # Open TV Input source menu
+            "sleep 2",             # Wait for the menu to appear
+            "input keyevent 22",   # DPAD_DOWN
+            "sleep 1",
+            "input keyevent 22",   # DPAD_DOWN
+            "sleep 1",
+            "input keyevent 23"    # DPAD_CENTER
+        ],
+        "play_video_commands": [
+            'am start -a android.intent.action.VIEW -d "file://{video_path}" -t "video/*" org.videolan.vlc'
+        ]
+    },
+
+    "192.168.1.33": {
+        "model": "tcl-special",
+        "video_path": "/sdcard/Movies/hot.mp4",
+        "hdmi_switch_commands": [
+            "input keyevent 178",  # Open TV Input source menu
+            "sleep 2",             # Wait for the menu to appear
+            "input keyevent 22",   # DPAD_DOWN
+            "sleep 1",
+            "input keyevent 22",   # DPAD_DOWN
+            "sleep 1",
+            "input keyevent 23"    # DPAD_CENTER
+        ],
+        "play_video_commands": [
+            'am start -a android.intent.action.VIEW -d "file://{video_path}" -t "video/*" org.videolan.vlc'
+        ]
+    },
     
     # This is a default template for all your TCL TVs
     "DEFAULT_TCL": {
@@ -100,13 +175,13 @@ TV_CONFIGS = {
     }
 }
 ALL_TV_IPS = [
-    "192.168.1.20", "192.168.1.21", "192.168.1.30", "192.168.1.31", "192.168.1.32", "192.168.1.33",
+    "192.168.1.20", "192.168.1.37", "192.168.1.40", "192.168.1.31", "192.168.1.39", "192.168.1.33",
     "192.168.1.34", "192.168.1.35", "192.168.1.36", "192.168.1.37", "192.168.1.38"
 ]
 # --- 3. LIST OF TCL TV IPs ---
 # Add all your TCL TV IP addresses here. They will automatically use the "DEFAULT_TCL" configuration.
 TCL_TV_IPS = [
-    "192.168.1.21", "192.168.1.30", "192.168.1.31", "192.168.1.32", "192.168.1.33", 
+    "192.168.1.37", "192.168.1.40", "192.168.1.31", "192.168.1.39", "192.168.1.33", 
     "192.168.1.34", "192.168.1.35", "192.168.1.36", "192.168.1.37", "192.168.1.38"
 ]
 
