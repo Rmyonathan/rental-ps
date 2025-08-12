@@ -199,12 +199,14 @@ TV_CONFIGS = {
     }
 }
 ALL_TV_IPS = [
+    "192.168.1.99", # <-- This is the new Test TV IP
     "192.168.1.20", "192.168.1.37", "192.168.1.40", "192.168.1.31", "192.168.1.39", "192.168.1.33",
     "192.168.1.34", "192.168.1.35", "192.168.1.36", "192.168.1.37", "192.168.1.38"
 ]
 # --- 3. LIST OF TCL TV IPs ---
 # Add all your TCL TV IP addresses here. They will automatically use the "DEFAULT_TCL" configuration.
 TCL_TV_IPS = [
+    "192.168.1.99", # <-- This is the new Test TV IP
     "192.168.1.37", "192.168.1.40", "192.168.1.31", "192.168.1.39", "192.168.1.33", 
     "192.168.1.34", "192.168.1.35", "192.168.1.36", "192.168.1.37", "192.168.1.38"
 ]
@@ -313,6 +315,8 @@ async def execute_adb_command(command: str, timeout: int = 10) -> Dict[str, Any]
         return {"success": False, "error": str(e)}
 
 async def execute_command_sequence(tv_ip: str, commands: List[str]):
+    if tv_ip == '192.168.1.99':
+        return {"success": True, "message": "Test TV command sequence simulated."}
     """Executes a sequence of ADB shell commands (e.g., for HDMI switching)."""
     for command in commands:
         if command.startswith("sleep"):
@@ -463,6 +467,8 @@ async def restart_adb_server():
 @app.post("/switch-to-hdmi2", response_model=BaseResponse)
 async def switch_tv_to_hdmi2(request: TVRequest):
     """Switches the TV to the configured HDMI input at the start of a rental."""
+    if request.tv_ip == '192.168.1.99':
+        return BaseResponse(success=True, message="Test TV switched to HDMI input (simulated).")
     config = get_tv_config(request.tv_ip)
     result = await execute_command_sequence(request.tv_ip, config["hdmi_switch_commands"])
     if not result["success"]:
@@ -474,6 +480,10 @@ async def play_timeout_video_internal(tv_ip: str, rental_id: int):
     Internal logic for playing the timeout video, used by monitor and manual trigger.
     This version is more robust to prevent common playback failures.
     """
+     # // EDIT: Add bypass for the Test TV
+    if tv_ip == '192.168.1.99':
+        print(f"🎬 Simulated timeout video for rental {rental_id} on Test TV.")
+        return {"success": True, "errors": []}
     config = get_tv_config(tv_ip)
     video_path = config["video_path"]
     vlc_package = "org.videolan.vlc"
@@ -529,6 +539,9 @@ async def manual_rental_timeout(request: PlayVideoRequest):
 @app.post("/tv-control", response_model=BaseResponse)
 async def control_tv(request: TVControlRequest):
     """Controls basic TV functions like volume and power."""
+    # // EDIT: Add bypass for the Test TV
+    if request.tv_ip == '192.168.1.99':
+        return BaseResponse(success=True, message=f"Action '{request.action}' sent to Test TV (simulated).")
     key_map = {
         'volume_up': 'KEYCODE_VOLUME_UP',
         'volume_down': 'KEYCODE_VOLUME_DOWN',
@@ -554,6 +567,9 @@ async def send_key_event(request: SendKeyRequest):
 
 @app.post("/test-connection", response_model=BaseResponse)
 async def test_tv_connection(request: TVRequest):
+    # // EDIT: Add a special case to always show the test TV as online.
+    if request.tv_ip == '192.168.1.99':
+        return BaseResponse(success=True, message="Online (Test)")
     """Checks if a TV is online and responsive via ADB."""
     # A simple 'echo' command is a lightweight way to check for a response.
     result = await execute_adb_command(f"-s {request.tv_ip}:5555 shell echo online", timeout=5)
@@ -570,6 +586,11 @@ async def test_tv_connection(request: TVRequest):
 @app.post("/start-rental-monitor", response_model=BaseResponse)
 async def start_rental_monitor(request: RentalTimeoutRequest):
     """Starts the background timeout monitor for a new rental."""
+    # // EDIT: Add bypass for the Test TV
+    if request.tv_ip == '192.168.1.99':
+        print(f"⏰ Simulated monitor started for rental {request.rental_id} on Test TV.")
+        return BaseResponse(success=True, message=f"Monitor started for rental {request.rental_id} (simulated).")
+
     rental_id = request.rental_id
     if rental_id in timeout_tasks:
         timeout_tasks[rental_id].cancel()
@@ -593,6 +614,10 @@ async def stop_rental_monitor(rental_id: int):
 async def test_all_tv_connections():
     """NEW: Checks all configured TVs concurrently and returns their statuses."""
     async def check_one_tv(ip: str):
+         # // EDIT: Add a special case to always show the test TV as online.
+        if ip == '192.168.1.99':
+            return ip, {"success": True, "message": "Online (Test)"}
+        
         result = await execute_adb_command(f"-s {ip}:5555 shell echo online", timeout=5)
         if result.get("success") and "online" in result.get("output", ""):
             return ip, {"success": True, "message": "Online"}

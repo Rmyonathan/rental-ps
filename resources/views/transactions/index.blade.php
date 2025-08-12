@@ -10,12 +10,12 @@
     </div>
 </div>
 
-<!-- Summary Cards -->
 <div class="row mb-4">
     <div class="col-md-3">
         <div class="card bg-primary text-white">
             <div class="card-body">
-                <h4>${{ number_format($balance, 2) }}</h4>
+                {{-- // EDIT: Changed to Rupiah format --}}
+                <h4>Rp {{ number_format($balance, 0, ',', '.') }}</h4>
                 <small>Total Balance</small>
             </div>
         </div>
@@ -23,7 +23,8 @@
     <div class="col-md-3">
         <div class="card bg-info text-white">
             <div class="card-body">
-                <h4>${{ number_format($dailyBalance, 2) }}</h4>
+                {{-- // EDIT: Changed to Rupiah format --}}
+                <h4>Rp {{ number_format($dailyBalance, 0, ',', '.') }}</h4>
                 <small>Today's Balance</small>
             </div>
         </div>
@@ -31,7 +32,8 @@
     <div class="col-md-3">
         <div class="card bg-success text-white">
             <div class="card-body">
-                <h4 id="monthlyCredit">$0.00</h4>
+                {{-- // EDIT: Changed placeholder to Rupiah --}}
+                <h4 id="monthlyCredit">Rp 0</h4>
                 <small>Monthly Credit</small>
             </div>
         </div>
@@ -39,14 +41,14 @@
     <div class="col-md-3">
         <div class="card bg-danger text-white">
             <div class="card-body">
-                <h4 id="monthlyDebit">$0.00</h4>
+                {{-- // EDIT: Changed placeholder to Rupiah --}}
+                <h4 id="monthlyDebit">Rp 0</h4>
                 <small>Monthly Debit</small>
             </div>
         </div>
     </div>
 </div>
 
-<!-- Filters -->
 <div class="card mb-4">
     <div class="card-body">
         <form method="GET" action="{{ route('transactions.index') }}">
@@ -90,7 +92,6 @@
     </div>
 </div>
 
-<!-- Transactions Table -->
 <div class="card">
     <div class="card-body">
         <div class="table-responsive">
@@ -129,8 +130,9 @@
                         <td>{{ $transaction->description }}</td>
                         <td>{{ $transaction->customer_name ?? '-' }}</td>
                         <td>
+                            {{-- // EDIT: Changed to Rupiah format --}}
                             <span class="text-{{ $transaction->type === 'credit' ? 'success' : 'danger' }}">
-                                {{ $transaction->type === 'credit' ? '+' : '-' }}${{ number_format($transaction->amount, 2) }}
+                                {{ $transaction->type === 'credit' ? '+' : '-' }}Rp {{ number_format($transaction->amount, 0, ',', '.') }}
                             </span>
                         </td>
                         <td>
@@ -156,12 +158,10 @@
             </table>
         </div>
         
-        <!-- ✅ Add pagination links -->
         {{ $transactions->links() }}
     </div>
 </div>
 
-<!-- Create Transaction Modal -->
 <div class="modal fade" id="createTransactionModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
@@ -182,7 +182,8 @@
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Amount</label>
-                        <input type="number" name="amount" class="form-control" step="0.01" min="0.01" required>
+                        {{-- // EDIT: Changed step to be more appropriate for Rupiah --}}
+                        <input type="number" name="amount" class="form-control" step="1000" min="0" required>
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Description</label>
@@ -213,17 +214,22 @@
 @endsection
 
 @section('scripts')
+{{-- // EDIT: The entire script section is updated for Rupiah formatting --}}
 <script>
-$(document).ready(function() {
-    // Load summary data
+document.addEventListener('DOMContentLoaded', function() {
     loadSummary();
 
     function loadSummary() {
         fetch('{{ route("transactions.summary") }}')
             .then(response => response.json())
             .then(data => {
-                $('#monthlyCredit').text('$' + parseFloat(data.monthly_credit).toLocaleString('en-US', {minimumFractionDigits: 2}));
-                $('#monthlyDebit').text('$' + parseFloat(data.monthly_debit).toLocaleString('en-US', {minimumFractionDigits: 2}));
+                // Helper function for Rupiah formatting
+                const formatRupiah = (number) => {
+                    return 'Rp ' + new Intl.NumberFormat('id-ID').format(number);
+                };
+
+                document.getElementById('monthlyCredit').textContent = formatRupiah(data.monthly_credit);
+                document.getElementById('monthlyDebit').textContent = formatRupiah(data.monthly_debit);
             })
             .catch(error => {
                 console.error('Error loading summary:', error);

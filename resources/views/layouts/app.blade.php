@@ -96,6 +96,26 @@
             border-bottom-color: #007bff;
             background-color: #f8f9ff;
         }
+        .hdmi-status-display {
+            font-size: 0.9em;
+            margin-bottom: 8px;
+            text-align: center;
+        }
+        .hdmi-indicator {
+            padding: 4px 10px;
+            border-radius: 6px;
+            background-color: #e9ecef;
+            color: #495057;
+            margin: 0 3px;
+            font-weight: normal;
+            border: 1px solid #dee2e6;
+        }
+        .hdmi-indicator.active {
+            background-color: #0d6efd;
+            color: white;
+            border-color: #0d6efd;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body class="bg-light">

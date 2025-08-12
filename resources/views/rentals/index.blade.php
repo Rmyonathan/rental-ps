@@ -56,6 +56,7 @@
         <div class="col-md-6 col-lg-4 mb-4" @if($station->rental) id="rental-card-{{ $station->rental->id }}" @endif>
             <div class="card h-100 station-card" data-tv-ip="{{ $station->ip }}">
                 <div class="card-header d-flex justify-content-between align-items-center {{ $station->rental ? 'bg-success' : 'bg-secondary' }} text-white">
+                    {{-- Display custom station name --}}
                     <h5 class="mb-0"><i class="bi bi-tv"></i> {{ $station->station_name }}</h5>
                     <span class="badge bg-light text-dark">{{ $station->ip }}</span>
                 </div>
@@ -72,9 +73,11 @@
                         </div>
                     </div>
 
-                    @if($station->rental)
+                      @if($station->rental)
                         <div class="status-info flex-grow-1">
-                             <p class="mb-1"><strong>Customer:</strong> {{ $station->rental->customer_name }}</p>
+                            <p class="mb-1"><strong>Customer:</strong> {{ $station->rental->customer_name }}</p>
+                            {{-- // NEW: Display console type for occupied stations --}}
+                            <p class="mb-1"><small class="text-muted">Console: {{ $station->console }}</small></p>
                             <p class="mb-1"><strong>Ends:</strong> {{ Carbon\Carbon::parse($station->rental->end_time)->format('h:i A') }}</p>
                             <div class="countdown-container my-2" 
                                  data-end-time="{{ Carbon\Carbon::parse($station->rental->end_time)->toISOString() }}" 
@@ -87,21 +90,29 @@
                     @else
                         <div class="text-center text-muted my-4 flex-grow-1 d-flex flex-column justify-content-center">
                             <i class="bi bi-controller display-4"></i>
+                            {{-- // NEW: Display console type for available stations --}}
+                            <p><strong>{{ $station->console }}</strong></p>
                             <p>Ready for new rental</p>
                         </div>
                     @endif
 
                      <!-- // NEW: Add this entire block for HDMI controls -->
                     @php
-                        $switchableTvs = ['192.168.1.31', '192.168.1.34', '192.168.1.36', '192.168.1.40'];
+                        $switchableTvs = ['192.168.1.31', '192.168.1.34', '192.168.1.36', '192.168.1.40', '192.168.1.99'];
                     @endphp
                     @if($station->rental && in_array($station->ip, $switchableTvs))
                         <div class="hdmi-controls-container mt-3 pt-3 border-top">
-                            <h6 class="text-muted">HDMI Control</h6>
-                            <p id="hdmi-status-{{ str_replace('.', '-', $station->ip) }}">Status: Checking...</p>
+                            <h6 class="text-muted text-center">HDMI Control</h6>
+                            
+                            {{-- // EDIT: Replaced the <p> tag with the new indicator display --}}
+                            <div class="hdmi-status-display" id="hdmi-status-{{ str_replace('.', '-', $station->ip) }}">
+                                <span class="hdmi-indicator active" data-input="hdmi1">HDMI 1 (PS)</span>
+                                <span class="hdmi-indicator" data-input="hdmi2">HDMI 2 (NS)</span>
+                            </div>
+
                             <div class="btn-group w-100">
-                                <button class="btn btn-sm btn-outline-primary hdmi-switch-btn" data-target="hdmi1">HDMI 1 (PS)</button>
-                                <button class="btn btn-sm btn-outline-secondary hdmi-switch-btn" data-target="hdmi2">HDMI 2 (NS)</button>
+                                <button class="btn btn-sm btn-outline-primary hdmi-switch-btn" data-target="hdmi1">Switch to PS</button>
+                                <button class="btn btn-sm btn-outline-secondary hdmi-switch-btn" data-target="hdmi2">Switch to NS</button>
                             </div>
                         </div>
                     @endif
@@ -139,6 +150,7 @@
     @endforelse
 </div>
 
+{{-- // EDIT: This entire modal has been updated for hourly price calculation --}}
 <div class="modal fade" id="extendModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
@@ -150,18 +162,28 @@
                 @csrf
                 <div class="modal-body">
                     <input type="hidden" name="rental_id" id="extendRentalId">
-                    <div class="mb-3">
-                        <label class="form-label">Additional Time</label>
-                        <select class="form-select" name="additional_minutes" id="additionalMinutes" required>
-                            <option value="15" data-price="2.00">15 minutes - $2.00</option>
-                            <option value="30" data-price="4.00">30 minutes - $4.00</option>
-                            <option value="60" data-price="7.00">1 hour - $7.00</option>
-                            <option value="120" data-price="13.00">2 hours - $13.00</option>
-                        </select>
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label class="form-label">Additional Time (Hours)</label>
+                                <select class="form-select" name="additional_minutes" id="additionalMinutes" required>
+                                    <option value="60" selected>1 Hour</option>
+                                    <option value="120">2 Hours</option>
+                                    <option value="180">3 Hours</option>
+                                    <option value="15">15 Minutes</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label class="form-label">Price per Hour (Rp)</label>
+                                <input type="number" class="form-control" id="extendPricePerHour" value="10000" step="1000" required>
+                            </div>
+                        </div>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">Additional Price</label>
-                        <input type="number" class="form-control" name="additional_price" id="additionalPrice" step="0.01" required readonly>
+                        <label class="form-label">Additional Price (Rp)</label>
+                        <input type="number" class="form-control" name="additional_price" id="additionalPrice" required readonly>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -185,15 +207,31 @@ document.addEventListener('DOMContentLoaded', function() {
     refreshAllStations();
     initAllHdmiControls();
     
-    // Handle extend modal price update and form submission
+     // --- Start of Extend Modal Logic ---
     const extendForm = document.getElementById('extendForm');
     const additionalMinutesSelect = document.getElementById('additionalMinutes');
     const additionalPriceInput = document.getElementById('additionalPrice');
+    const extendPricePerHourInput = document.getElementById('extendPricePerHour');
 
-    additionalMinutesSelect.addEventListener('change', function() {
-        const selectedOption = this.options[this.selectedIndex];
-        additionalPriceInput.value = selectedOption.dataset.price;
-    });
+    function calculateAdditionalPrice() {
+        const durationInMinutes = parseInt(additionalMinutesSelect.value, 10);
+        const pricePerHour = parseInt(extendPricePerHourInput.value, 10);
+
+        if (isNaN(durationInMinutes) || isNaN(pricePerHour)) {
+            additionalPriceInput.value = '';
+            return;
+        }
+
+        const hours = durationInMinutes / 60;
+        const totalPrice = hours * pricePerHour;
+        
+        additionalPriceInput.value = totalPrice;
+    }
+
+    // Add event listeners to the modal inputs
+    additionalMinutesSelect.addEventListener('change', calculateAdditionalPrice);
+    extendPricePerHourInput.addEventListener('input', calculateAdditionalPrice);
+
 
     extendForm.addEventListener('submit', function(e) {
         e.preventDefault();
@@ -391,26 +429,63 @@ async function controlTv(tvIp, action) {
 }
 
 function initAllHdmiControls() {
-    const switchableTvs = ['192.168.1.31', '192.168.1.34', '192.168.1.36', '192.168.1.40'];
-    
-    document.querySelectorAll('.station-card').forEach(card => {
-        const tvIp = card.dataset.tvIp;
-        if (switchableTvs.includes(tvIp)) {
-            // Fetch initial status for this TV
-            updateHdmiStatus(tvIp);
+    document.querySelectorAll('.hdmi-switch-btn').forEach(button => {
+        button.addEventListener('click', () => {
+            const card = button.closest('.station-card');
+            const tvIp = card.dataset.tvIp;
+            const targetInput = button.dataset.target;
             
-            // Add click listeners to its buttons
-            card.querySelectorAll('.hdmi-switch-btn').forEach(button => {
-                button.addEventListener('click', () => {
-                    const targetInput = button.dataset.target;
-                    handleSwitchHdmi(tvIp, targetInput);
-                });
-            });
-
-            // Set an interval to refresh the status periodically for this TV
-            setInterval(() => updateHdmiStatus(tvIp), 30000);
-        }
+            // Send the command to the backend but don't wait for a response to update the UI
+            sendCommandToSwitchHdmi(tvIp, targetInput);
+            
+            // Update the front-end indicator immediately
+            updateHdmiIndicator(tvIp, targetInput);
+        });
     });
+}
+
+function updateHdmiIndicator(tvIp, activeInput) {
+    const statusContainerId = `hdmi-status-${tvIp.replace(/\./g, '-')}`;
+    const statusContainer = document.getElementById(statusContainerId);
+
+    if (!statusContainer) return;
+
+    // Remove 'active' class from all indicators in this container
+    statusContainer.querySelectorAll('.hdmi-indicator').forEach(indicator => {
+        indicator.classList.remove('active');
+    });
+
+    // Add 'active' class to the target indicator
+    const activeIndicator = statusContainer.querySelector(`.hdmi-indicator[data-input="${activeInput}"]`);
+    if (activeIndicator) {
+        activeIndicator.classList.add('active');
+    }
+}
+
+async function sendCommandToSwitchHdmi(tvIp, targetInput) {
+    console.log(`Sending switch command for ${tvIp} to ${targetInput}`);
+    try {
+        const response = await fetch('{{ route("tv.switch-hdmi") }}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-TOKEN': '{{ csrf_token() }}'
+            },
+            body: JSON.stringify({
+                tv_ip: tvIp,
+                hdmi_input: targetInput
+            })
+        });
+        const result = await response.json();
+        if (!result.success) {
+            // Log the error but don't bother the user, as the UI has already updated.
+            console.error(`Error switching TV ${tvIp}: ${result.error || 'Unknown error'}`);
+        } else {
+            console.log(`Successfully sent switch command for ${tvIp}.`);
+        }
+    } catch (error) {
+        console.error(`Network error switching HDMI for ${tvIp}:`, error);
+    }
 }
 
 /**

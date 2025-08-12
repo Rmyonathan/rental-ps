@@ -69,7 +69,7 @@
                                     
                                     <div class="mt-auto">
                                         <div class="d-flex justify-content-between align-items-center mb-2">
-                                            <span class="h6 text-primary mb-0">${{ number_format($item->price, 2) }}</span>
+                                            <span class="h6 text-primary mb-0">Rp {{ number_format($item->price, 0, ',', '.') }}</span>
                                             <span class="badge bg-{{ $item->is_available ? 'success' : 'danger' }}">
                                                 {{ $item->is_available ? 'Available' : 'Unavailable' }}
                                             </span>

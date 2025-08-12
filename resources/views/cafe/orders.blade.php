@@ -16,7 +16,6 @@
     </div>
 </div>
 
-<!-- Existing orders display code remains the same -->
 <div class="row">
     @forelse($orders as $order)
     <div class="col-md-6 col-lg-4 mb-3">
@@ -27,7 +26,8 @@
                     @if($order->order_type === 'separate')
                         <span class="badge bg-info me-1">Standalone</span>
                     @elseif($order->rental)
-                        <span class="badge bg-primary me-1">PS {{ $order->rental->ps_station }}</span>
+                        {{-- // EDIT: Use the custom station name from the controller --}}
+                        <span class="badge bg-primary me-1">{{ $order->rental->ps_station }}</span>
                     @endif
                     <span class="badge bg-{{ 
                         $order->status === 'pending' ? 'warning' : 
@@ -64,7 +64,8 @@
                 </div>
                 
                 <div class="d-flex justify-content-between align-items-center">
-                    <strong>${{ number_format($order->total, 2) }}</strong>
+                    {{-- // EDIT: Changed to Rupiah format --}}
+                    <strong>Rp {{ number_format($order->total, 0, ',', '.') }}</strong>
                     <div class="btn-group btn-group-sm">
                         @if($order->status === 'pending')
                             <button class="btn btn-outline-primary" onclick="updateOrderStatus({{ $order->id }}, 'preparing')">

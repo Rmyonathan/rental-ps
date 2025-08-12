@@ -18,41 +18,86 @@ class RentalController extends Controller
         $this->tvControlService = $tvControlService;
     }
 
+    // // NEW: Add this private helper function to manage all station data.
+    private function getStationData()
+    {
+        // This is the central map for all your stations.
+        // Edit names, consoles, and prices here.
+        $stationMap = [
+            '192.168.1.20' => ['name' => '3 (PS5)', 'console' => 'PS5', 'price' => 20000, 'type' => 'Regular'],
+            '192.168.1.33' => ['name' => '1 (PS4)', 'console' => 'PS4', 'price' => 10000, 'type' => 'Regular'],
+            '192.168.1.35' => ['name' => '2 (PS4)', 'console' => 'PS4', 'price' => 10000, 'type' => 'Regular'],
+            '192.168.1.38' => ['name' => '4 (PS4)', 'console' => 'PS4', 'price' => 10000, 'type' => 'Regular'],
+            '192.168.1.37' => ['name' => '5 (PS4)', 'console' => 'PS4', 'price' => 10000, 'type' => 'Regular'],
+            '192.168.1.39' => ['name' => '6 (PS5)', 'console' => 'PS5', 'price' => 20000, 'type' => 'Regular'],
+            '192.168.1.40' => ['name' => 'VIP 1 Alpha', 'console' => 'PS4 + Switch', 'price' => 30000, 'type' => 'VIP'],
+            '192.168.1.31' => ['name' => 'VIP 2 Beta', 'console' => 'PS4 + Switch', 'price' => 30000, 'type' => 'VIP'],
+            '192.168.1.34' => ['name' => 'VVIP 1 Delta', 'console' => 'PS5 + Switch', 'price' => 40000, 'type' => 'VVIP'],
+            '192.168.1.36' => ['name' => 'VVIP 2 Gamma', 'console' => 'PS5 + Switch', 'price' => 40000, 'type' => 'VVIP'],
+            '192.168.1.99' => ['name' => 'Test TV', 'console' => 'Test', 'price' => 1000, 'type' => 'Test'],
+        ];
+
+        // Get all configured IPs from the Python service
+        $configuredIps = $this->tvControlService->getConfiguredTvs();
+        
+        $stations = [];
+        foreach ($configuredIps as $ip) {
+            if (isset($stationMap[$ip])) {
+                $stations[] = (object)[
+                    'ip' => $ip,
+                    'station_name' => $stationMap[$ip]['name'],
+                    'console' => $stationMap[$ip]['console'],
+                    'price_per_hour' => $stationMap[$ip]['price'],
+                    'type' => $stationMap[$ip]['type']
+                ];
+            }
+        }
+        return collect($stations);
+    }
+
     /**
      * Display the main dashboard with all configured TV stations and their rental status.
      */
     public function index()
     {
-        // Get the list of all configured TV IPs from the Python server
-        $configuredTvs = $this->tvControlService->getConfiguredTvs();
-        
-        if (empty($configuredTvs)) {
-            // Fallback to a default list if the API is down to prevent a crash
-            $configuredTvs = ['192.168.1.20', '192.168.1.21']; 
-             session()->flash('warning', 'Could not connect to the TV control server. Please ensure it is running. Displaying a default list of TVs.');
-        }
-
+        $allStations = $this->getStationData();
         $activeRentals = Rental::where('status', 'active')->with('cafeOrders')->get()->keyBy('tv_ip');
 
-        // Create a collection of TV station objects for the view
-        $tvStations = collect($configuredTvs)->map(function ($ip, $index) use ($activeRentals) {
-            // Create a more descriptive station name
-            $stationName = 'PS' . ($index + 1);
-            $model = $this->tvControlService->getApiHealth()['configured_tvs'][$ip]['model'] ?? 'TV';
-            $stationName .= ' (' . ucfirst($model) . ')';
+        // Define the custom sort order for station types
+        $typeOrder = [
+            'Regular' => 1,
+            'VIP' => 2,
+            'VVIP' => 3,
+            'Test' => 4,
+        ];
 
-            return (object)[
-                'ip' => $ip,
-                'station_name' => 'PS' . ($index + 1),
-                'rental' => $activeRentals->get($ip)
-            ];
+        // // EDIT: Add this sorting logic before passing the data to the view.
+        $tvStations = $allStations->sortBy(function ($station) use ($typeOrder) {
+            // Get the primary sort key from the type order map
+            $primarySort = $typeOrder[$station->type] ?? 99;
+            
+            // For 'Regular' stations, extract the number for secondary sorting
+            $secondarySort = 0;
+            if ($station->type === 'Regular') {
+                preg_match('/^\d+/', $station->station_name, $matches);
+                $secondarySort = isset($matches[0]) ? (int)$matches[0] : 0;
+            }
+
+            // Return a combined key for sorting
+            return $primarySort . '.' . str_pad($secondarySort, 4, '0', STR_PAD_LEFT);
+        });
+
+        // Attach rental data to each station object
+        $tvStations->each(function ($station) use ($activeRentals) {
+            $station->rental = $activeRentals->get($station->ip);
         });
         
         return view('rentals.index', [
             'tvStations' => $tvStations,
-            'activeRentals' => $activeRentals // For summary stats
+            'activeRentals' => $activeRentals
         ]);
     }
+
     /**
      * NEW: Efficiently refresh the status of all TVs.
      */
@@ -66,21 +111,23 @@ class RentalController extends Controller
      * Show the form for creating a new rental.
      */
     public function create(Request $request)
-    {
-        $tvIp = $request->input('tv_ip');
-        $stationName = $request->input('station');
+{
+    $tvIp = $request->input('tv_ip');
+    $stationName = $request->input('station');
 
-        // Get all configured TVs and filter out those that are already rented
-        $allTvs = $this->tvControlService->getConfiguredTvs();
-        $activeRentalIps = Rental::where('status', 'active')->pluck('tv_ip')->toArray();
-        $availableTvs = array_diff($allTvs, $activeRentalIps);
+    // // This is the new helper function from the previous step
+    $allStations = $this->getStationData(); 
+    $activeRentalIps = Rental::where('status', 'active')->pluck('tv_ip')->toArray();
 
-        return view('rentals.create', [
-            'tv_ip' => $tvIp,
-            'station' => $stationName,
-            'availableTvs' => $availableTvs
-        ]);
-    }
+    // Filter out the stations that are currently rented
+    $availableTvs = $allStations->whereNotIn('ip', $activeRentalIps);
+
+    return view('rentals.create', [
+        'tv_ip' => $tvIp,
+        'station' => $stationName,
+        'availableTvs' => $availableTvs // This is now a collection of objects
+    ]);
+}
 
     /**
      * Store a newly created rental in the database.
@@ -238,28 +285,78 @@ class RentalController extends Controller
      */
     public function historyByIp(Request $request, $tv_ip)
     {
+        // Fetch all station data to find the current station's name
+        $allStations = $this->getStationData();
+        $currentStation = $allStations->firstWhere('ip', $tv_ip);
+
+        // If for some reason the IP is not in our map, create a fallback object
+        if (!$currentStation) {
+            $currentStation = (object)['ip' => $tv_ip, 'station_name' => 'Unknown Station'];
+        }
+
         $query = Rental::where('tv_ip', $tv_ip)->orderBy('start_time', 'desc');
-        $rentals = $query->get();
-        $totalDuration = $rentals->sum('duration_minutes');
+
+        // Apply search filter for customer name
+        if ($request->filled('search')) {
+            $query->where('customer_name', 'like', '%' . $request->search . '%');
+        }
+
+        // Apply date range filters
+        if ($request->filled('start_date')) {
+            $query->whereDate('start_time', '>=', $request->start_date);
+        }
+        if ($request->filled('end_date')) {
+            $query->whereDate('start_time', '<=', $request->end_date);
+        }
+
+        // Get filtered results for totals
+        $filteredRentals = $query->get();
+        $totalDuration = $filteredRentals->sum('duration_minutes');
+        $totalPrice = $filteredRentals->sum('price');
         $totalHours = round($totalDuration / 60, 2);
 
+        // Paginate the results
+        $rentals = $query->paginate(15);
+
         return view('rentals.history', [
-            'tv' => (object)['ip_address' => $tv_ip],
+            'tv' => $currentStation, // Pass the full station object
             'rentals' => $rentals,
             'totalDuration' => $totalDuration,
+            'totalPrice' => $totalPrice,
             'totalHours' => $totalHours,
         ]);
     }
-
     /**
      * Get a unique list of all TV IPs that have ever had a rental.
      */
     public function ipList()
     {
-        $ips = Rental::select('tv_ip')->distinct()->get();
-        return view('rentals.ip_list', compact('ips'));
+        $allStations = $this->getStationData();
+
+        // Define the custom sort order for station types
+        $typeOrder = [
+            'Regular' => 1,
+            'VIP'     => 2,
+            'VVIP'    => 3,
+            'Test'    => 4,
+        ];
+
+        // Apply the same sorting logic as the index page
+        $stations = $allStations->sortBy(function ($station) use ($typeOrder) {
+            $primarySort = $typeOrder[$station->type] ?? 99;
+            
+            $secondarySort = 0;
+            if ($station->type === 'Regular') {
+                preg_match('/^\d+/', $station->station_name, $matches);
+                $secondarySort = isset($matches[0]) ? (int)$matches[0] : 0;
+            }
+
+            return $primarySort . '.' . str_pad($secondarySort, 4, '0', STR_PAD_LEFT);
+        });
+        
+        // Pass the sorted collection of station objects to the view.
+        return view('rentals.ip_list', ['stations' => $stations]);
     }
-    
     /**
      * Update a rental's end time. Used for syncing countdowns after extending.
      */

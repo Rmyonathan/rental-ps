@@ -47,9 +47,9 @@
                             <div class="mb-3">
                                 <label class="form-label">Cost Price (Optional)</label>
                                 <div class="input-group">
-                                    <span class="input-group-text">$</span>
+                                    <span class="input-group-text">Rp</span>
                                     <input type="number" name="cost_price" class="form-control @error('cost_price') is-invalid @enderror" 
-                                           value="{{ old('cost_price', $cafeStock->cost_price) }}" step="0.01" min="0">
+                                           value="{{ old('cost_price', $cafeStock->cost_price) }}" step="1000" min="0">
                                 </div>
                                 @error('cost_price')
                                     <div class="invalid-feedback">{{ $message }}</div>

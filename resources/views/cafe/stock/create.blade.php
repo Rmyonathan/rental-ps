@@ -17,7 +17,7 @@
                             <option value="">Select an item...</option>
                             @foreach($cafeItems as $item)
                                 <option value="{{ $item->id }}" {{ old('cafe_item_id') == $item->id ? 'selected' : '' }}>
-                                    {{ $item->name }} - ${{ number_format($item->price, 2) }} ({{ ucfirst($item->category) }})
+                                    {{ $item->name }} - Rp {{ number_format($item->price, 2) }} ({{ ucfirst($item->category) }})
                                 </option>
                             @endforeach
                         </select>
@@ -61,9 +61,9 @@
                             <div class="mb-3">
                                 <label class="form-label">Cost Price (Optional)</label>
                                 <div class="input-group">
-                                    <span class="input-group-text">$</span>
+                                    <span class="input-group-text">Rp </span>
                                     <input type="number" name="cost_price" class="form-control @error('cost_price') is-invalid @enderror" 
-                                           value="{{ old('cost_price') }}" step="0.01" min="0">
+                                           value="{{ old('cost_price') }}" step="1000" min="0">
                                 </div>
                                 @error('cost_price')
                                     <div class="invalid-feedback">{{ $message }}</div>

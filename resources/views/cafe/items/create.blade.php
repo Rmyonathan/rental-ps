@@ -53,9 +53,9 @@
                             <div class="mb-3">
                                 <label class="form-label">Price *</label>
                                 <div class="input-group">
-                                    <span class="input-group-text">$</span>
+                                    <span class="input-group-text">Rp</span>
                                     <input type="number" name="price" class="form-control @error('price') is-invalid @enderror" 
-                                           value="{{ old('price') }}" step="0.01" min="0" required placeholder="0.00">
+                                           value="{{ old('price') }}" step="1000" min="0" required placeholder="0">
                                 </div>
                                 @error('price')
                                     <div class="invalid-feedback">{{ $message }}</div>

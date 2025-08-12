@@ -107,7 +107,7 @@
                                 @endif
                                 <div>
                                     <div class="fw-bold">{{ $stock->cafeItem->name }}</div>
-                                    <small class="text-muted">${{ number_format($stock->cafeItem->price, 2) }}</small>
+                                    <small class="text-muted">Rp {{ number_format($stock->cafeItem->price, 2) }}</small>
                                 </div>
                             </div>
                         </td>
@@ -135,7 +135,7 @@
                         </td>
                         <td>
                             @if($stock->cost_price)
-                                ${{ number_format($stock->cost_price, 2) }}
+                                Rp {{ number_format($stock->cost_price, 2) }}
                             @else
                                 <span class="text-muted">-</span>
                             @endif

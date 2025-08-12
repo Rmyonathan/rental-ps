@@ -66,7 +66,7 @@
                                         @endif
                                         
                                         <div class="d-flex justify-content-between align-items-center">
-                                            <span class="fw-bold text-primary">${{ number_format($item->price, 2) }}</span>
+                                            <span class="fw-bold text-primary">Rp {{ number_format($item->price, 0, ',', '.') }}</span>
                                             <div class="d-flex align-items-center gap-2">
                                                 @if($item->is_in_stock)
                                                     <span class="badge bg-success">{{ $item->stock_quantity }} left</span>
@@ -137,23 +137,22 @@
                         </div>
 
                         <!-- Order Totals -->
-                        <div id="orderTotals" style="display: none;">
-                            <hr>
-                            <div class="d-flex justify-content-between">
-                                <span>Subtotal:</span>
-                                <span id="subtotalAmount">$0.00</span>
-                            </div>
-                            <div class="d-flex justify-content-between">
-                                <span>Tax (10%):</span>
-                                <span id="taxAmount">$0.00</span>
-                            </div>
-                            <hr>
-                            <div class="d-flex justify-content-between fw-bold">
-                                <span>Total:</span>
-                                <span id="totalAmount">$0.00</span>
-                            </div>
+                    <div id="orderTotals" style="display: none;">
+                        <hr>
+                        <div class="d-flex justify-content-between">
+                            <span>Subtotal:</span>
+                            <span id="subtotalAmount">Rp 0</span>
                         </div>
-
+                        <div class="d-flex justify-content-between">
+                            <span>Tax (10%):</span>
+                            <span id="taxAmount">Rp 0</span>
+                        </div>
+                        <hr>
+                        <div class="d-flex justify-content-between fw-bold">
+                            <span>Total:</span>
+                            <span id="totalAmount">Rp 0</span>
+                        </div>
+                    </div>
                         <!-- Special Notes -->
                         <div class="mt-3">
                             <label class="form-label">Special Notes</label>
@@ -190,6 +189,11 @@
 <script>
 let selectedItems = {};
 let subtotal = 0;
+// Helper function for Rupiah formatting
+const formatRupiah = (number) => {
+    return 'Rp ' + new Intl.NumberFormat('id-ID').format(number);
+};
+
 
 function toggleItem(element) {
     const itemId = element.dataset.itemId;
@@ -300,9 +304,9 @@ function updateOrderSummary() {
     const tax = subtotal * 0.1;
     const total = subtotal + tax;
     
-    document.getElementById('subtotalAmount').textContent = `$${subtotal.toFixed(2)}`;
-    document.getElementById('taxAmount').textContent = `$${tax.toFixed(2)}`;
-    document.getElementById('totalAmount').textContent = `$${total.toFixed(2)}`;
+    document.getElementById('subtotalAmount').textContent = formatRupiah(subtotal);
+    document.getElementById('taxAmount').textContent = formatRupiah(tax);
+    document.getElementById('totalAmount').textContent = formatRupiah(total);
     
     orderTotals.style.display = 'block';
     placeOrderBtn.disabled = false;
