@@ -28,6 +28,13 @@ class TransactionController extends Controller
             $query->where('type', $request->type);
         }
 
+          // // NEW: Add this block to filter by payment method
+        if ($request->filled('payment_method')) {
+            // // EDIT: Use a LIKE query to find the payment method anywhere in the notes.
+            $query->where('notes', 'like', '%Payment: ' . $request->payment_method . '%');
+        }
+
+
         if ($request->filled('search')) {
             $searchValue = $request->search;
             $query->where(function ($q) use ($searchValue) {

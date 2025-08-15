@@ -9,7 +9,7 @@ use App\Models\CafeStock;
 
 class TransactionService
 {
-    public static function recordRentalTransaction(Rental $rental)
+    public static function recordRentalTransaction(Rental $rental, string $paymentMethod)
     {
         return Transaction::create([
             'transaction_number' => Transaction::generateTransactionNumber(),
@@ -21,7 +21,7 @@ class TransactionService
             'reference_id' => $rental->id,
             'customer_name' => $rental->customer_name,
             'transaction_date' => $rental->start_time,
-            'notes' => "Duration: {$rental->duration_minutes} minutes"
+            'notes' => "Duration: {$rental->duration_minutes} mins, Payment: {$paymentMethod}"
         ]);
     }
 
@@ -95,5 +95,25 @@ class TransactionService
             ->sum('amount');
         
         return $totalCredit - $totalDebit;
+    }
+    public static function recordRentalExtensionTransaction(Rental $rental, $additionalPrice, string $paymentMethod)
+    {
+        // Do not record a transaction if the extension was free.
+        if ($additionalPrice <= 0) {
+            return null;
+        }
+
+        return Transaction::create([
+            'transaction_number' => Transaction::generateTransactionNumber(),
+            'type'               => 'credit',
+            'amount'             => $additionalPrice,
+            'description'        => "Rental extension - {$rental->ps_station}",
+            'category'           => 'rental',
+            'reference_type'     => 'rental',
+            'reference_id'       => $rental->id,
+            'customer_name'      => $rental->customer_name,
+            'transaction_date'   => now(), // The transaction happens now
+            'notes'              => "Extension Payment: {$paymentMethod}"
+        ]);
     }
 }

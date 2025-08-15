@@ -128,6 +128,9 @@
                     <div class="d-grid gap-2">
                         @if($station->rental)
                              <div class="btn-group w-100">
+                                  {{-- // NEW: Add this button to trigger the cafe modal --}}
+                                <button type="button" class="btn btn-info btn-sm" onclick="showCafeModal({{ $station->rental->id }}, '{{ $station->ip }}', '{{ $station->rental->customer_name }}', '{{ $station->station_name }}')">
+                                    <i class="bi bi-cup-hot"></i> Cafe Order
                                 <button type="button" class="btn btn-primary btn-sm" onclick="showExtendModal({{ $station->rental->id }})">Extend</button>
                                 <button type="button" class="btn btn-danger btn-sm" onclick="forceEndRental({{ $station->rental->id }})">End Now</button>
                              </div>
@@ -184,6 +187,15 @@
                     <div class="mb-3">
                         <label class="form-label">Additional Price (Rp)</label>
                         <input type="number" class="form-control" name="additional_price" id="additionalPrice" required readonly>
+                    </div>
+                     <div class="mb-3">
+                        <label class="form-label">Payment Method *</label>
+                        <select name="payment_method" class="form-select" required>
+                            <option value="CASH" selected>Cash</option>
+                            <option value="QRIS">QRIS</option>
+                            <option value="DEBIT">Debit</option>
+                            <option value="TRANSFER">Transfer</option>
+                        </select>
                     </div>
                 </div>
                 <div class="modal-footer">

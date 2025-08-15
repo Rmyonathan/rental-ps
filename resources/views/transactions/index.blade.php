@@ -103,6 +103,7 @@
                         <th>Type</th>
                         <th>Category</th>
                         <th>Description</th>
+                        <th>Payment Method</th>
                         <th>Customer</th>
                         <th>Amount</th>
                         <th>Reference</th>
@@ -128,6 +129,24 @@
                             </span>
                         </td>
                         <td>{{ $transaction->description }}</td>
+                         <td>
+                            @php
+                                $paymentMethod = '-'; // Default value
+                                if (str_contains($transaction->notes, 'Payment:')) {
+                                    // Split the string and get the part after "Payment: "
+                                    $parts = explode('Payment:', $transaction->notes);
+                                    if (isset($parts[1])) {
+                                        $paymentMethod = trim($parts[1]);
+                                    }
+                                }
+                            @endphp
+                            
+                            @if($paymentMethod !== '-')
+                                <span class="badge bg-dark">{{ $paymentMethod }}</span>
+                            @else
+                                -
+                            @endif
+                        </td>
                         <td>{{ $transaction->customer_name ?? '-' }}</td>
                         <td>
                             {{-- // EDIT: Changed to Rupiah format --}}

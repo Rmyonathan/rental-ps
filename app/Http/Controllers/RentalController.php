@@ -135,11 +135,12 @@ class RentalController extends Controller
     public function store(Request $request)
     {
         $validated = $request->validate([
-            'customer_name' => 'required|string|max:255',
-            'tv_ip' => 'required|ip',
-            'ps_station' => 'required|string',
+            'customer_name'    => 'required|string|max:255',
+            'tv_ip'            => 'required|ip',
+            'ps_station'       => 'required|string',
             'duration_minutes' => 'required|integer|min:1',
-            'price' => 'required|numeric|min:0',
+            'price'            => 'required|numeric|min:0',
+            'payment_method'   => 'required|string|in:CASH,QRIS,DEBIT,TRANSFER', // Added validation
         ]);
 
         // 1. Switch TV to HDMI before creating the rental record
@@ -150,18 +151,19 @@ class RentalController extends Controller
 
         // 2. Create the rental record
         $rental = Rental::create([
-            'customer_name' => $validated['customer_name'],
-            'tv_ip' => $validated['tv_ip'],
-            'ps_station' => $validated['ps_station'],
+            'customer_name'    => $validated['customer_name'],
+            'tv_ip'            => $validated['tv_ip'],
+            'ps_station'       => $validated['ps_station'],
             'duration_minutes' => $validated['duration_minutes'],
-            'price' => $validated['price'],
-            'start_time' => now(),
-            'end_time' => now()->addMinutes((int) $validated['duration_minutes']),
-            'status' => 'active',
+            'price'            => $validated['price'],
+            'start_time'       => now(),
+            'end_time'         => now()->addMinutes((int) $validated['duration_minutes']),
+            'status'           => 'active',
+            'phone'            => $validated['payment_method'], // // EDIT: Save payment method in 'phone' column
         ]);
         
         // 3. Record the transaction for accounting
-        TransactionService::recordRentalTransaction($rental);
+        TransactionService::recordRentalTransaction($rental, $validated['payment_method']);
 
         // 4. Start the timeout monitor on the Python server
         $this->tvControlService->startRentalMonitor($rental->tv_ip, $rental->id, $rental->duration_minutes * 60);
@@ -224,26 +226,33 @@ class RentalController extends Controller
      * Extend the duration of an active rental.
      */
     public function extend(Request $request, $rentalId)
-{
-    $rental = Rental::findOrFail($rentalId);
-    $validated = $request->validate([
-        'additional_minutes' => 'required|integer|min:1',
-        'additional_price' => 'required|numeric|min:0',
-    ]);
+    {
+        $rental = Rental::findOrFail($rentalId);
+        $validated = $request->validate([
+            'additional_minutes' => 'required|integer|min:1',
+            'additional_price'   => 'required|numeric|min:0',
+            'payment_method'     => 'required|string|in:CASH,QRIS,DEBIT,TRANSFER', // Added validation
+        ]);
 
-    // FIX: Use the existing Carbon instance and cast the input to an integer
-    $rental->end_time = $rental->end_time->addMinutes((int) $validated['additional_minutes']);
-    
-    $rental->duration_minutes += (int) $validated['additional_minutes'];
-    $rental->price += $validated['additional_price'];
-    $rental->save();
-    
-    // Stop the old monitor and start a new one with the updated duration
-    $newDurationSeconds = now()->diffInSeconds($rental->end_time);
-    $this->tvControlService->startRentalMonitor($rental->tv_ip, $rental->id, $newDurationSeconds);
+        // Get the values before updating
+        $additionalMinutes = (int) $validated['additional_minutes'];
+        $additionalPrice = $validated['additional_price'];
 
-    return response()->json(['success' => true, 'message' => 'Rental extended successfully.']);
-}
+        // Update the rental details
+        $rental->end_time = $rental->end_time->addMinutes($additionalMinutes);
+        $rental->duration_minutes += $additionalMinutes;
+        $rental->price += $additionalPrice;
+        $rental->save();
+        
+        // // EDIT: Add this line to record the new payment in the kas.
+        TransactionService::recordRentalExtensionTransaction($rental, $additionalPrice, $validated['payment_method']);
+
+        // Stop the old monitor and start a new one with the updated duration
+        $newDurationSeconds = now()->diffInSeconds($rental->end_time);
+        $this->tvControlService->startRentalMonitor($rental->tv_ip, $rental->id, $newDurationSeconds);
+
+        return response()->json(['success' => true, 'message' => 'Rental extended successfully.']);
+    }
 
     /**
      * Mark a rental as completed manually.

@@ -180,6 +180,27 @@
         @yield('content')
     </div>
 
+     {{-- // NEW: Add this modal placeholder at the end of your body tag --}}
+    <div class="modal fade" id="cafeOrderModal" tabindex="-1">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-cup-hot"></i> Cafe Order</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body" id="cafeOrderModalBody">
+                    {{-- Content will be loaded here via JavaScript --}}
+                    <div class="text-center p-5">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                        <p class="mt-3">Loading Cafe Menu...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         // Auto-refresh functionality
@@ -251,62 +272,44 @@
         updateCountdowns();
 
         // Cafe modal functionality
-        function showCafeModal(tvIp, rentalId = null) {
-            const modalHtml = `
-                <div class="modal fade" id="cafeOrderModal" tabindex="-1">
-                    <div class="modal-dialog modal-xl">
-                        <div class="modal-content">
-                            <div class="modal-header">
-                                <h5 class="modal-title">
-                                    <i class="bi bi-cup-hot"></i> Cafe Order
-                                    ${rentalId ? ' - Integrated with Rental' : ' - Separate Order'}
-                                </h5>
-                                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                            </div>
-                            <div class="modal-body p-0">
-                                <div class="text-center p-4">
-                                    <div class="spinner-border" role="status">
-                                        <span class="visually-hidden">Loading menu...</span>
-                                    </div>
-                                    <p class="mt-2">Loading cafe menu...</p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `;
+        function showCafeModal(rentalId, tvIp, customerName, stationName) {
+            const modalElement = document.getElementById('cafeOrderModal');
+            const modalBody = document.getElementById('cafeOrderModalBody');
+            const modalTitle = modalElement.querySelector('.modal-title');
+            const cafeModal = new bootstrap.Modal(modalElement);
+
+            // Set the title for the modal
+            modalTitle.innerHTML = `<i class="bi bi-cup-hot"></i> New Order for ${customerName} (${stationName})`;
+
+            // Show a loading spinner
+            modalBody.innerHTML = `
+                <div class="text-center p-5">
+                    <div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div>
+                    <p class="mt-3">Loading Cafe Menu...</p>
+                </div>`;
             
-            // Remove existing modal if any
-            const existingModal = document.getElementById('cafeOrderModal');
-            if (existingModal) {
-                existingModal.remove();
-            }
-            
-            // Add new modal to body
-            document.body.insertAdjacentHTML('beforeend', modalHtml);
-            
-            // Show modal
-            const modal = new bootstrap.Modal(document.getElementById('cafeOrderModal'));
-            modal.show();
-            
-            // Load cafe menu
-            const orderType = rentalId ? 'integrated' : 'separate';
-            const url = `/cafe/menu?tv_ip=${tvIp}&rental_id=${rentalId || ''}&order_type=${orderType}`;
+            cafeModal.show();
+
+            // Fetch the menu content for an integrated order
+            const url = `/cafe/menu?order_type=integrated&rental_id=${rentalId}&tv_ip=${tvIp}`;
             
             fetch(url)
                 .then(response => response.text())
                 .then(html => {
-                    document.querySelector('#cafeOrderModal .modal-body').innerHTML = html;
+                    modalBody.innerHTML = html;
+                    // Re-initialize any scripts within the loaded content
+                    const scripts = modalBody.querySelectorAll('script');
+                    scripts.forEach(script => {
+                        const newScript = document.createElement('script');
+                        newScript.textContent = script.textContent;
+                        document.body.appendChild(newScript).remove();
+                    });
                 })
                 .catch(error => {
-                    document.querySelector('#cafeOrderModal .modal-body').innerHTML = `
-                        <div class="alert alert-danger m-4">
-                            <i class="bi bi-exclamation-triangle"></i>
-                            Failed to load cafe menu. Please try again.
-                        </div>
-                    `;
+                    console.error('Failed to load cafe menu:', error);
+                    modalBody.innerHTML = `<div class="alert alert-danger m-3">Failed to load menu. Please try again.</div>`;
                 });
-        }
+            }        
     </script>
     @yield('scripts')
 </body>

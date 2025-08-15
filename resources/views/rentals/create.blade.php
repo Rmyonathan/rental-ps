@@ -45,6 +45,20 @@
                             <div class="invalid-feedback">{{ $message }}</div>
                         @enderror
                     </div>
+
+                    <div class="mb-3">
+                        {{-- // NEW: Add this entire payment method dropdown block --}}
+                        <label class="form-label">Payment Method *</label>
+                        <select name="payment_method" class="form-select @error('payment_method') is-invalid @enderror" required>
+                            <option value="CASH" selected>Cash</option>
+                            <option value="QRIS">QRIS</option>
+                            <option value="DEBIT">Debit</option>
+                            <option value="TRANSFER">Transfer</option>
+                        </select>
+                        @error('payment_method')
+                            <div class="invalid-feedback">{{ $message }}</div>
+                        @enderror
+                    </div>
                     
                     {{-- // EDIT: Removed the problematic default value from this input. --}}
                     <input type="hidden" name="ps_station" id="ps_station_input" value="{{ old('ps_station') }}">
